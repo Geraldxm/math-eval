@@ -119,7 +119,42 @@ API key 只从环境变量读取，不写入配置或产物。
   --run-dir outputs/runs/example-vllm --k 1 2
 ```
 
-状态严格区分 `correct`、`incorrect`、`no_candidate`、`parse_error` 和 `verification_error`。parser 只判定 `final_text`；截断事实单独记录，不自动改变 candidate 或 verdict。
+### 统一验证语义
+
+本仓库统一使用 [Hugging Face Math-Verify](https://github.com/huggingface/Math-Verify) 0.9.0 解析和比较数学答案，不为不同 benchmark 分别维护 integer、number、expression grader，也不提供 last-number fallback 或题目级等价特判。
+
+Math-Verify 上游负责从给定文本中提取数学表达式、转换为公共数学表示，并执行数值或符号等价判断。本仓库在它之上增加一层可重放的评测协议：
+
+| 层 | 职责 |
+|---|---|
+| canonical data | 所有数据集统一提供字符串形式的 `answer` |
+| math-eval 本地适配 | 选择 candidate，定义 strict/soft 与截断语义，分类失败状态，记录 parser ID 和配置 hash |
+| Math-Verify 0.9.0 | 使用统一 extraction config 解析 gold/prediction，并执行数学等价判断 |
+| metrics | 从冻结的 parsed verdict 重算 accuracy、pass@k、failure rate 和 truncation rate |
+
+gold 与 prediction 最终共用 `LatexExtractionConfig(boxed_match_priority=0)` 和 `ExprExtractionConfig()`。本仓库没有重新实现分数、小数、代数式、tuple、复数、集合或矩阵的等价规则；这些能力、容差与已知边界继承自固定版本的 Math-Verify。具体适配实现在 [`scripts/parser.py`](scripts/parser.py)，可执行案例与边界见 [`math_verify_walkthrough.ipynb`](math_verify_walkthrough.ipynb)。
+
+### Strict、soft 与截断
+
+`math-v5-dual` 的 strict 与 soft 只在 candidate selection 上不同，之后调用完全相同的 Math-Verify `parse()` / `verify()`：
+
+- **strict**：只接受最后一个完整的 `\boxed{}`，用于正式指标。
+- **soft**：仅当不存在完整 box 时，才将非空 `final_text` 全文交给 Math-Verify，用于诊断“答案可能正确但未遵守 boxed 输出协议”的样本。
+- 如果存在完整 box，strict 与 soft 使用同一个 candidate 和 verdict；即使 box 内答案错误，soft 也不会回退到正文寻找另一个答案。
+
+`truncated` 是与 strict/soft 正交的生成状态。当前 parser 不会因为输出被截断就自动判错或切换提取策略；真正影响 candidate 的是截断后是否仍存在完整 box：
+
+| `final_text` 状态 | `truncated` | strict | soft |
+|---|---:|---|---|
+| 存在完整 `\boxed{}` | `false` | 验证最后一个完整 box | 与 strict 相同 |
+| 存在完整 box，但之后被截断 | `true` | 仍验证最后一个完整 box | 与 strict 相同 |
+| 末尾 box 未闭合，但此前存在完整 box | `true` | 忽略未闭合部分，验证此前最后一个完整 box | 与 strict 相同 |
+| 没有完整 box，文本非空 | `false` 或 `true` | `no_candidate` | 尝试从已有全文提取并验证 |
+| 文本为空 | `false` 或 `true` | `no_candidate` | `no_candidate` |
+
+因此，截断率单独进入 metrics，但不自动改变 candidate 或 verdict。若希望把“截断后一律判错”作为另一种评测协议，应创建新的 parser ID，而不是在同一 parser 版本下改变历史结果。
+
+状态严格区分 `correct`、`incorrect`、`no_candidate`、`parse_error` 和 `verification_error`：`incorrect` 表示解析成功但数学上不等价，后三者分别表示没有候选、候选解析失败和等价验证异常。它们在正式指标中都按未答对计入，同时保留独立计数，避免把格式失败或 verifier 异常混成普通数学错误。
 
 比较两个具有相同数据、gold、parser 和 decode 语义的 run：
 
