@@ -157,6 +157,16 @@ metrics 的 `pass@k` 使用每题全部样本计算无偏估计；compare 的 so
 
 ## 引用与许可证
 
-如果本项目对你的研究有帮助，请使用 [`CITATION.cff`](CITATION.cff) 或 [`CITATION.bib`](CITATION.bib) 引用。
+如果本项目对你的研究有帮助，请使用 [`CITATION.cff`](CITATION.cff) 引用或直接复制以下 BibTeX：
+
+```bibtex
+@software{ge_math_eval_2026,
+  author  = {Ge, Xinmu},
+  title   = {math-eval: Reproducible Mathematical Reasoning Generation and Evaluation},
+  year    = {2026},
+  url     = {https://github.com/Geraldxm/math-eval},
+  license = {Apache-2.0}
+}
+```
 
 Copyright 2026 Xinmu Ge. Licensed under the [Apache License 2.0](LICENSE)；再分发时须保留许可证、版权和适用的署名声明，详见 [`NOTICE`](NOTICE)。
