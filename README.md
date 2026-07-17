@@ -10,6 +10,20 @@ canonical JSONL -> evaluate.py -> raw shards -> replay_evaluation.py -> parsed +
 
 生成与判分刻意分离：更换 parser 或指标时不需要重新调用模型，所有指标都能从 raw/parsed 产物重算。
 
+## 与其他评测框架的区别
+
+大多数评测框架在 CLI 层面统一了多 benchmark 调用，但每个 benchmark 背后使用不同的数据格式、答案解析器和正确性判断逻辑。math-eval 在更深的层级做统一：**数据格式（canonical JSONL）+ 验证语义（统一 Math-Verify pipeline）**。
+
+| | lm-eval-harness / LightEval | math-eval + math-vault |
+|---|---:|---|
+| 统一层级 | CLI（`--tasks gsm8k,math`） | 数据层（canonical JSONL）+ 验证层（统一 Math-Verify） |
+| 新增 benchmark | 编写新 task 模块（数据加载 + 自定义解析 + 聚合） | 将数据转为 `id/problem/answer` JSONL |
+| 更换 parser/指标 | 需重新调用模型 | `replay_evaluation.py` 从 raw shards 直接重算 |
+| 中断恢复 | 通常从头开始 | `--resume` 从断点继续 |
+| 数据 provenance | 不追踪 | math-vault 逐数据集记录上游来源与许可证 |
+
+math-eval 不是 lm-eval-harness 的替代品。需要快速覆盖 50+ benchmark 出 leaderboard 时，lm-eval-harness 或 LightEval 更合适。需要对同一批数据反复做严谨评测——换 parser、换指标、对比不同配置——时，math-eval 的生成与判分分离架构是更趁手的工具。
+
 ## 安装
 
 完整 GPU 环境要求 Linux x86_64、NVIDIA driver 和 [uv](https://docs.astral.sh/uv/)。当前 lock 验证基线为 Python 3.12.11、vLLM 0.25.1+cu129 与 PyTorch 2.11.0+cu129：
@@ -139,7 +153,7 @@ gold 与 prediction 最终共用 `LatexExtractionConfig(boxed_match_priority=0)`
 `math-v5-dual` 的 strict 与 soft 只在 candidate selection 上不同，之后调用完全相同的 Math-Verify `parse()` / `verify()`：
 
 - **strict**：只接受最后一个完整的 `\boxed{}`，用于正式指标。
-- **soft**：仅当不存在完整 box 时，才将非空 `final_text` 全文交给 Math-Verify，用于诊断“答案可能正确但未遵守 boxed 输出协议”的样本。
+- **soft**：仅当不存在完整 box 时，才将非空 `final_text` 全文交给 Math-Verify，用于诊断"答案可能正确但未遵守 boxed 输出协议"的样本。
 - 如果存在完整 box，strict 与 soft 使用同一个 candidate 和 verdict；即使 box 内答案错误，soft 也不会回退到正文寻找另一个答案。
 
 `truncated` 是与 strict/soft 正交的生成状态。当前 parser 不会因为输出被截断就自动判错或切换提取策略；真正影响 candidate 的是截断后是否仍存在完整 box：
@@ -152,7 +166,7 @@ gold 与 prediction 最终共用 `LatexExtractionConfig(boxed_match_priority=0)`
 | 没有完整 box，文本非空 | `false` 或 `true` | `no_candidate` | 尝试从已有全文提取并验证 |
 | 文本为空 | `false` 或 `true` | `no_candidate` | `no_candidate` |
 
-因此，截断率单独进入 metrics，但不自动改变 candidate 或 verdict。若希望把“截断后一律判错”作为另一种评测协议，应创建新的 parser ID，而不是在同一 parser 版本下改变历史结果。
+因此，截断率单独进入 metrics，但不自动改变 candidate 或 verdict。若希望把"截断后一律判错"作为另一种评测协议，应创建新的 parser ID，而不是在同一 parser 版本下改变历史结果。
 
 状态严格区分 `correct`、`incorrect`、`no_candidate`、`parse_error` 和 `verification_error`：`incorrect` 表示解析成功但数学上不等价，后三者分别表示没有候选、候选解析失败和等价验证异常。它们在正式指标中都按未答对计入，同时保留独立计数，避免把格式失败或 verifier 异常混成普通数学错误。
 
