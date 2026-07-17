@@ -1,7 +1,7 @@
 # math-eval
 
 [![Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.21411208.svg)](https://doi.org/10.5281/zenodo.21411208)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.21411207.svg)](https://doi.org/10.5281/zenodo.21411207)
 [![Python 3.12](https://img.shields.io/badge/python-3.12-blue)](https://www.python.org/)
 
 Resumable, replayable math reasoning eval. Reads canonical JSONL, generates via vLLM or OpenAI-compatible API, then parses and scores independently.
