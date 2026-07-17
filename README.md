@@ -200,6 +200,7 @@ metrics 的 `pass@k` 使用每题全部样本的无偏估计；compare 的 solve
   author  = {Ge, Xinmu},
   title   = {math-eval: Reproducible Mathematical Reasoning Generation and Evaluation},
   year    = {2026},
+  doi     = {10.5281/zenodo.21411207},
   url     = {https://github.com/Geraldxm/math-eval},
   license = {Apache-2.0}
 }
