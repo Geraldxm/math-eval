@@ -21,7 +21,7 @@ lm-eval-harness、LightEval 等框架在 CLI 层统一多 benchmark 调用，但
 |---|---:|---|
 | 统一层级 | CLI 参数（`--tasks`） | 数据格式（canonical JSONL）+ 验证语义（Math-Verify） |
 | 添加 benchmark | 编写 task 模块 | 转换 `id/problem/answer` JSONL |
-| 更换 parser | 重新调用模型 | 从 raw shards 重放 |
+| 更换 parser | 重新调用模型 | 从 raw shards 直接解析 |
 | 中断恢复 | 无 | `--resume` |
 
 数据由 [math-vault](https://github.com/Geraldxm/math-vault) 统一维护，逐数据集记录 provenance 与许可证。
@@ -122,27 +122,27 @@ DeepSeek API：
 
 API key 仅从 `DEEPSEEK_API_KEY` 环境变量读取，不写入配置或产物。
 
-## 重放评测
+## 解析与判分
 
-默认 parser `math-v5-dual`：strict 取最后一个完整 `\boxed{}` 用于正式指标，soft 仅在无完整 box 时用全文作诊断。
+生成产物（raw shards）冻结后，解析与判分可独立、反复执行。更换 parser 或验证规则不需要重新调用模型。
 
 ```bash
 .venv/bin/python scripts/replay_evaluation.py \
   --run-dir outputs/runs/example-vllm --k 1 2
 ```
 
-### 验证语义
+### 统一验证
 
-所有 benchmark 共用一个 Math-Verify 0.9.0 pipeline，不为不同数据集维护 integer / number / expression grader。
+主流框架为不同 benchmark 维护各自的 grader（整数比对、表达式等价、选项匹配等）。math-eval 的 canonical JSONL 将 answer 统一为字符串，因此所有 benchmark 共用同一个 Math-Verify 0.9.0 pipeline：
 
 | 层 | 职责 |
 |---|---|
-| canonical data | 所有数据集统一为字符串 `answer` |
-| math-eval parser | 选择 candidate，定义 strict/soft/截断语义，记录 parser ID 与 config hash |
-| Math-Verify 0.9.0 | 统一 extraction config 解析 gold/prediction 并执行数学等价判断 |
-| metrics | 从冻结 parsed verdict 重算 accuracy、pass@k、各 failure 率 |
+| canonical data | 所有数据集 `answer` 均为字符串 |
+| math-eval parser | candidate 选择、strict/soft/截断语义、状态分类、parser ID |
+| Math-Verify 0.9.0 | 统一 extraction config 做数学等价判断 |
+| metrics | 从冻结 verdict 重算 accuracy、pass@k、failure 率 |
 
-gold 与 prediction 共用 `LatexExtractionConfig(boxed_match_priority=0)` 和 `ExprExtractionConfig()`。具体实现在 [`scripts/parser.py`](scripts/parser.py)，可执行案例见 [`math_verify_walkthrough.ipynb`](math_verify_walkthrough.ipynb)。
+gold 与 prediction 共用 `LatexExtractionConfig(boxed_match_priority=0)` 和 `ExprExtractionConfig()`。实现见 [`scripts/parser.py`](scripts/parser.py)，边界案例见 [`math_verify_walkthrough.ipynb`](math_verify_walkthrough.ipynb)。
 
 ### Strict、soft 与截断
 
@@ -180,7 +180,7 @@ metrics 的 `pass@k` 使用每题全部样本的无偏估计；compare 的 solve
 
 ## Notebook
 
-- `quickstart.ipynb`：安装、vLLM/API 生成、replay 主线。
+- `quickstart.ipynb`：安装、生成、解析与判分主线。
 - `math_verify_walkthrough.ipynb`：parser 语义、错误分类与已知边界。
 
 两个 notebook 均不在打开时调用 GPU 或 API。
