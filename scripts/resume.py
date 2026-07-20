@@ -164,7 +164,10 @@ class RawShardWriter:
             os.fsync(self._handle.fileno())
             self._handle.close()
             self._handle = None
-        if not self.active_path.exists() or self.row_count == 0:
+        if not self.active_path.exists():
+            return
+        if self.row_count == 0:
+            self.active_path.unlink()
             return
         suffix = ".jsonl.gz" if self.compression == "gzip" else ".jsonl"
         sealed = self.directory / f"part-{self.part_index:05d}{suffix}"

@@ -11,6 +11,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import yaml
+from math_verify.errors import TimeoutException
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
@@ -38,9 +39,12 @@ from parser import (
     PARSER_ID,
     V5_DUAL_PARSER_CONFIG_HASH,
     V5_DUAL_PARSER_ID,
+    V51_DUAL_PARSER_CONFIG_HASH,
+    V51_DUAL_PARSER_ID,
     parse_and_verify,
     parse_dual_and_verify,
     parse_v5_dual_and_verify,
+    parse_v51_dual_and_verify,
 )
 from replay_evaluation import replay
 from resume import RawShardWriter, scan_raw
@@ -371,6 +375,14 @@ class ResumeTest(unittest.TestCase):
             self.assertEqual(len(rows), 1)
             self.assertTrue(active.read_bytes().endswith(b"\n"))
 
+    def test_empty_active_shard_is_removed_on_close(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            active = root / "part-00000.jsonl.inprogress"
+            active.touch()
+            RawShardWriter(root).close()
+            self.assertFalse(active.exists())
+
     def test_gzip_orphan_recovery_and_conflict(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -462,6 +474,25 @@ class ParserAndMetricsTest(unittest.TestCase):
         self.assertEqual(result.status, "verification_error")
         self.assertFalse(result.is_correct)
 
+        with (
+            patch("parser.verify", side_effect=TimeoutException("boom")),
+            self.assertRaises(TimeoutException),
+        ):
+            parse_and_verify(r"\boxed{42}", "42")
+
+        class Unprintable:
+            def __bool__(self):
+                return True
+
+            def __str__(self):
+                raise ValueError("too large to normalize")
+
+        with (
+            patch("parser.parse", side_effect=[[42], Unprintable()]),
+            self.assertRaisesRegex(ValueError, "too large to normalize"),
+        ):
+            parse_and_verify(r"\boxed{42}", "42")
+
         with self.assertRaisesRegex(ValueError, "gold answer must be non-empty"):
             parse_and_verify(r"\boxed{42}", "")
 
@@ -507,12 +538,33 @@ class ParserAndMetricsTest(unittest.TestCase):
         v5 = parse_v5_dual_and_verify(response, piecewise)
         self.assertIs(v5.strict, v5.soft)
         self.assertEqual(v5.strict.status, "correct")
+        self.assertEqual(parse_v51_dual_and_verify(response, piecewise), v5)
         self.assertEqual(
             parse_v5_dual_and_verify(r"\boxed{\frac{1}{2}", r"\frac{1}{2}").strict.status,
             "no_candidate",
         )
         self.assertEqual(V5_DUAL_PARSER_ID, "math-v5-dual")
         self.assertTrue(V5_DUAL_PARSER_CONFIG_HASH)
+
+        with patch("parser.verify", side_effect=TimeoutException("boom")):
+            timeout = parse_v51_dual_and_verify(r"\boxed{42}", "42")
+        self.assertEqual(timeout.strict.status, "verification_error")
+
+        class Unprintable:
+            def __bool__(self):
+                return True
+
+            def __str__(self):
+                raise ValueError("too large to normalize")
+
+        with patch("parser.parse", side_effect=[[42], Unprintable()]):
+            unprintable = parse_v51_dual_and_verify(r"\boxed{42}", "42")
+        self.assertEqual(unprintable.strict.status, "parse_error")
+        self.assertEqual(V51_DUAL_PARSER_ID, "math-v5.1-dual")
+        self.assertEqual(
+            V51_DUAL_PARSER_CONFIG_HASH,
+            "e732b5ad06825d23fdbddd293d69f40b7fa9643c4a8c96b3e4baf53269d4b5e2",
+        )
 
     def test_metrics_and_compare_compatibility(self):
         rows = []
@@ -727,7 +779,15 @@ class PipelineTest(unittest.TestCase):
                 patch("evaluate.create_backend", return_value=FakeBackend()) as create,
             ):
                 run_dir = run(config_path, "run", False)
+                raw_dir = run_dir / "raw" / "fake" / "tiny"
+                sealed = raw_dir / "part-00000.jsonl"
+                active = raw_dir / "part-00000.jsonl.inprogress"
+                sealed.rename(active)
+                with self.assertRaisesRegex(ValueError, "unsealed raw shards"):
+                    replay(run_dir, [1, 2])
                 run(config_path, "run", True)
+                self.assertFalse(active.exists())
+                self.assertTrue(sealed.exists())
                 config["decode"]["temperature"] = 0.1
                 config_path.write_text(yaml.safe_dump(config), encoding="utf-8")
                 with self.assertRaisesRegex(ValueError, "generation spec"):
@@ -806,6 +866,14 @@ class PipelineTest(unittest.TestCase):
             self.assertEqual(metrics["strict"]["k"]["2"]["pass_at_k"], 1.0)
             self.assertEqual(metrics["soft_recovery_count"], 0)
             self.assertEqual(load_run(parsed_path, 2)["solved"], {"tiny:1"})
+
+            v51_parsed, _ = replay(run_dir, [1, 2], V51_DUAL_PARSER_ID)
+            self.assertTrue(
+                all(
+                    row["parser_id"] == V51_DUAL_PARSER_ID
+                    for row in read_jsonl(v51_parsed)
+                )
+            )
 
 
 if __name__ == "__main__":

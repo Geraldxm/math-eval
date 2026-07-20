@@ -254,10 +254,10 @@ def run(config_path: Path, run_id: str, resume: bool = False) -> Path:
         ):
             work.append((source, sample_idx))
 
+    raw_dir = run_dir / "raw" / safe_name(model_name) / safe_name(dataset_name)
     if work:
         backend = create_backend(config["model"], thinking_preflight)
         request_batch_size = getattr(backend, "request_batch_size", 1)
-        raw_dir = run_dir / "raw" / safe_name(model_name) / safe_name(dataset_name)
         with RawShardWriter(
             raw_dir,
             shard_size=int(output.get("shard_size", 100)),
@@ -291,11 +291,25 @@ def run(config_path: Path, run_id: str, resume: bool = False) -> Path:
                         )
                     )
 
+    # Seal a fully written active shard even when resume found no missing work.
+    RawShardWriter(
+        raw_dir,
+        shard_size=int(output.get("shard_size", 100)),
+        compression=output.get("compression", "none"),
+        fsync_every=int(output.get("fsync_every", 1)),
+    ).close()
+    if list(raw_dir.glob("part-*.jsonl.inprogress")):
+        raise RuntimeError(f"{run_dir}: unsealed raw shard remains")
+    sample_count = len(scan_raw(run_dir / "raw"))
+    expected_count = len(rows) * int(config["decode"]["samples_per_problem"])
+    if sample_count != expected_count:
+        raise RuntimeError(f"{run_dir}: incomplete raw samples {sample_count}/{expected_count}")
+
     manifest.update(
         {
             "status": "completed",
             "completed_at": utc_now(),
-            "sample_count": len(scan_raw(run_dir / "raw")),
+            "sample_count": sample_count,
         }
     )
     atomic_json(run_dir / "manifests/run.json", manifest)

@@ -8,6 +8,7 @@ import re
 from dataclasses import asdict, dataclass
 
 from math_verify import ExprExtractionConfig, LatexExtractionConfig, parse, verify
+from math_verify.errors import TimeoutException
 
 from io_utils import stable_hash
 
@@ -15,6 +16,7 @@ from io_utils import stable_hash
 PARSER_ID = "math-v3"
 DUAL_PARSER_ID = "math-v4-dual"
 V5_DUAL_PARSER_ID = "math-v5-dual"
+V51_DUAL_PARSER_ID = "math-v5.1-dual"
 MATH_VERIFY_VERSION = importlib.metadata.version("math-verify")
 EXTRACTION_CONFIG = (
     LatexExtractionConfig(boxed_match_priority=0),
@@ -55,6 +57,21 @@ V5_DUAL_PARSER_CONFIG_HASH = stable_hash(
         "truncated_affects_candidate": False,
         "gold_math_environment": True,
         "raise_on_error": True,
+    }
+)
+V51_DUAL_PARSER_CONFIG_HASH = stable_hash(
+    {
+        "parser_id": V51_DUAL_PARSER_ID,
+        "math_verify_version": MATH_VERIFY_VERSION,
+        "extraction_config": [asdict(config) for config in EXTRACTION_CONFIG],
+        "strict_candidate_selection": "last_complete_boxed_only",
+        "strict_markers": ["boxed"],
+        "strict_brace_matching": "balanced_unescaped_braces",
+        "soft_candidate_selection": "strict_candidate_else_full_final_text",
+        "truncated_affects_candidate": False,
+        "gold_math_environment": True,
+        "raise_on_error": True,
+        "failure_handling": "timeout_and_normalization_errors_to_verdict",
     }
 )
 
@@ -207,6 +224,7 @@ def _verify_candidate(
     rule: str | None,
     parsed_gold: list,
     normalized_gold: str,
+    safe: bool = False,
 ) -> Verdict:
     if candidate is None:
         return _no_candidate(normalized_gold)
@@ -228,6 +246,18 @@ def _verify_candidate(
             extraction_rule=rule,
             error=f"{type(exc).__name__}: {exc}",
         )
+    except TimeoutException as exc:
+        if not safe:
+            raise
+        return Verdict(
+            status="parse_error",
+            is_correct=False,
+            candidate_text=candidate,
+            normalized_prediction=None,
+            normalized_gold=normalized_gold,
+            extraction_rule=rule,
+            error=f"{type(exc).__name__}: {exc}",
+        )
     if not parsed_prediction:
         return Verdict(
             status="parse_error",
@@ -239,10 +269,36 @@ def _verify_candidate(
             error="candidate could not be parsed",
         )
 
-    normalized_prediction = str(parsed_prediction)
+    try:
+        normalized_prediction = str(parsed_prediction)
+    except (Exception, TimeoutException) as exc:
+        if not safe:
+            raise
+        return Verdict(
+            status="parse_error",
+            is_correct=False,
+            candidate_text=candidate,
+            normalized_prediction=None,
+            normalized_gold=normalized_gold,
+            extraction_rule=rule,
+            error=f"{type(exc).__name__}: {exc}",
+        )
+
     try:
         correct = bool(verify(parsed_gold, parsed_prediction, raise_on_error=True))
     except Exception as exc:
+        return Verdict(
+            status="verification_error",
+            is_correct=False,
+            candidate_text=candidate,
+            normalized_prediction=normalized_prediction,
+            normalized_gold=normalized_gold,
+            extraction_rule=rule,
+            error=f"{type(exc).__name__}: {exc}",
+        )
+    except TimeoutException as exc:
+        if not safe:
+            raise
         return Verdict(
             status="verification_error",
             is_correct=False,
@@ -276,6 +332,7 @@ def _parse_dual(
     final_text: str,
     gold: str,
     boxed: str | None,
+    safe: bool = False,
 ) -> DualParseResult:
     parsed_gold = _parse_gold(gold)
     normalized_gold = str(parsed_gold)
@@ -285,6 +342,7 @@ def _parse_dual(
             "last_boxed",
             parsed_gold,
             normalized_gold,
+            safe,
         )
         return DualParseResult(strict=verdict, soft=verdict)
 
@@ -296,6 +354,7 @@ def _parse_dual(
         "full_final_text",
         parsed_gold,
         normalized_gold,
+        safe,
     )
     return DualParseResult(strict=strict, soft=soft)
 
@@ -314,3 +373,11 @@ def parse_v5_dual_and_verify(
     truncated: bool = False,
 ) -> DualParseResult:
     return _parse_dual(final_text, gold, last_v5_strict_boxed(final_text))
+
+
+def parse_v51_dual_and_verify(
+    final_text: str,
+    gold: str,
+    truncated: bool = False,
+) -> DualParseResult:
+    return _parse_dual(final_text, gold, last_v5_strict_boxed(final_text), safe=True)

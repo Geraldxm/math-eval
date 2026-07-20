@@ -17,9 +17,12 @@ from parser import (
     PARSER_ID,
     V5_DUAL_PARSER_CONFIG_HASH,
     V5_DUAL_PARSER_ID,
+    V51_DUAL_PARSER_CONFIG_HASH,
+    V51_DUAL_PARSER_ID,
     parse_and_verify,
     parse_dual_and_verify,
     parse_v5_dual_and_verify,
+    parse_v51_dual_and_verify,
 )
 
 
@@ -28,8 +31,16 @@ def replay(
     k_values: list[int],
     parser_id: str = V5_DUAL_PARSER_ID,
 ) -> tuple[Path, Path]:
-    if parser_id not in {PARSER_ID, DUAL_PARSER_ID, V5_DUAL_PARSER_ID}:
+    if parser_id not in {
+        PARSER_ID,
+        DUAL_PARSER_ID,
+        V5_DUAL_PARSER_ID,
+        V51_DUAL_PARSER_ID,
+    }:
         raise ValueError(f"unsupported parser_id: {parser_id}")
+    active_paths = sorted(run_dir.glob("raw/**/*.jsonl.inprogress"))
+    if active_paths:
+        raise ValueError(f"{run_dir}: unsealed raw shards remain; resume generation first")
     raw_paths = sorted(
         {
             path
@@ -45,6 +56,7 @@ def replay(
         PARSER_ID: PARSER_CONFIG_HASH,
         DUAL_PARSER_ID: DUAL_PARSER_CONFIG_HASH,
         V5_DUAL_PARSER_ID: V5_DUAL_PARSER_CONFIG_HASH,
+        V51_DUAL_PARSER_ID: V51_DUAL_PARSER_CONFIG_HASH,
     }[parser_id]
 
     def parsed_rows():
@@ -71,12 +83,16 @@ def replay(
                     str(row["gold_answer"]),
                     bool(row.get("truncated", False)),
                 )
-                if parser_id in {DUAL_PARSER_ID, V5_DUAL_PARSER_ID}:
-                    parser = (
-                        parse_v5_dual_and_verify
-                        if parser_id == V5_DUAL_PARSER_ID
-                        else parse_dual_and_verify
-                    )
+                if parser_id in {
+                    DUAL_PARSER_ID,
+                    V5_DUAL_PARSER_ID,
+                    V51_DUAL_PARSER_ID,
+                }:
+                    parser = {
+                        DUAL_PARSER_ID: parse_dual_and_verify,
+                        V5_DUAL_PARSER_ID: parse_v5_dual_and_verify,
+                        V51_DUAL_PARSER_ID: parse_v51_dual_and_verify,
+                    }[parser_id]
                     result = parser(*arguments)
                     yield {
                         **raw_row,
@@ -119,7 +135,7 @@ def main() -> int:
     argument_parser.add_argument("--k", type=int, nargs="+", default=[1])
     argument_parser.add_argument(
         "--parser-id",
-        choices=(PARSER_ID, DUAL_PARSER_ID, V5_DUAL_PARSER_ID),
+        choices=(PARSER_ID, DUAL_PARSER_ID, V5_DUAL_PARSER_ID, V51_DUAL_PARSER_ID),
         default=V5_DUAL_PARSER_ID,
     )
     args = argument_parser.parse_args()
