@@ -113,6 +113,31 @@ configs/qwen35_4b_base.yaml
   --run-id example-vllm --resume
 ```
 
+同一数据集可由多个独立进程确定性分区。`--shard-count` 是 worker 数据分区数；配置中的 `output.shard_size` 只控制每个 raw JSONL 文件最多写多少行，两者互不影响。两张卡各运行一半数据时，保持配置中的 `tensor_parallel_size: 1`：
+
+```bash
+CUDA_VISIBLE_DEVICES=0 .venv/bin/python scripts/evaluate.py \
+  --config configs/qwen3_4b_instruct_2507.yaml --run-id example-parallel \
+  --shard-index 0 --shard-count 2 &
+CUDA_VISIBLE_DEVICES=1 .venv/bin/python scripts/evaluate.py \
+  --config configs/qwen3_4b_instruct_2507.yaml --run-id example-parallel \
+  --shard-index 1 --shard-count 2 &
+wait
+```
+
+两个进程分别写入 `example-parallel.part-00000-of-00002` 和 `example-parallel.part-00001-of-00002`。单个分片中断时，使用相同的 shard 参数并增加 `--resume`。全部完成后合并为普通 run，再沿用现有 replay：
+
+```bash
+.venv/bin/python scripts/merge_shards.py \
+  --output outputs/runs/example-parallel \
+  outputs/runs/example-parallel.part-00000-of-00002 \
+  outputs/runs/example-parallel.part-00001-of-00002
+.venv/bin/python scripts/replay_evaluation.py \
+  --run-dir outputs/runs/example-parallel --k 1 10 100
+```
+
+高采样测试只需在配置中设置 `decode.samples_per_problem: 100`。跨机器运行使用相同配置、run ID、shard count 和不同 shard index，完成后将所有 part 目录复制到同一机器再显式执行合并；合并器会拒绝缺失、重复、未完成、hash 不一致、代码 revision 不一致或 Python/核心包版本不一致的分片。manifest 目前只记录 checkpoint 路径而不 fingerprint 权重内容，因此跨机器必须使用相同的 clean commit，并自行确保该路径对应完全相同的模型权重。
+
 DeepSeek API：
 
 ```bash

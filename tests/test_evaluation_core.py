@@ -31,6 +31,7 @@ from inference import (
     validate_model,
 )
 from io_utils import read_jsonl
+from merge_shards import merge
 from metrics import compute_metrics
 from parser import (
     DUAL_PARSER_CONFIG_HASH,
@@ -874,6 +875,130 @@ class PipelineTest(unittest.TestCase):
                     for row in read_jsonl(v51_parsed)
                 )
             )
+
+    def test_partition_resume_merge_and_replay(self):
+        generated = []
+
+        class FakeBackend:
+            def generate(self, prompt, decode, sample_idx):
+                generated.append((prompt[-1]["content"], sample_idx))
+                return InferenceResult(
+                    raw_text="\\boxed{4}",
+                    reasoning_text=None,
+                    final_text="\\boxed{4}",
+                    thinking_status="non_thinking_ok",
+                    finish_reason="stop",
+                    prompt_tokens=3,
+                    output_tokens=2,
+                    response_id=str(len(generated)),
+                    resolved_request={},
+                )
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            dataset = root / "data.jsonl"
+            dataset.write_text(
+                "".join(
+                    json.dumps({"id": str(index), "problem": "2+2?", "answer": "4"})
+                    + "\n"
+                    for index in range(4)
+                ),
+                encoding="utf-8",
+            )
+            prompt_dir = root / "prompt"
+            prompt_dir.mkdir()
+            (prompt_dir / "00-user.txt").write_text("{{problem}}", encoding="utf-8")
+            config = {
+                "dataset": {"name": "tiny", "path": str(dataset), "limit": 4},
+                "model": {
+                    "name": "fake",
+                    "backend": "vllm",
+                    "path": "unused",
+                    "input_mode": "chat",
+                    "thinking": False,
+                },
+                "prompt": str(prompt_dir),
+                "decode": decode_config(samples_per_problem=100),
+                "output": {
+                    "root": str(root / "runs"),
+                    "shard_size": 250,
+                    "compression": "none",
+                },
+            }
+            config_path = root / "config.yaml"
+            config_path.write_text(yaml.safe_dump(config), encoding="utf-8")
+            preflight = {
+                "applicable": True,
+                "configured": True,
+                "supported": True,
+                "requested": False,
+                "chat_template_sha256": "template-hash",
+            }
+            with (
+                patch("evaluate.preflight_model", return_value=preflight),
+                patch("evaluate.create_backend", return_value=FakeBackend()),
+            ):
+                shard0 = run(config_path, "parallel", shard_index=0, shard_count=2)
+                shard1 = run(config_path, "parallel", shard_index=1, shard_count=2)
+                sealed = next((shard1 / "raw").glob("**/part-*.jsonl"))
+                rows = list(read_jsonl(sealed))
+                active = sealed.with_suffix(".jsonl.inprogress")
+                active.write_text(
+                    "".join(json.dumps(row) + "\n" for row in rows[:-1]),
+                    encoding="utf-8",
+                )
+                sealed.unlink()
+                shard_manifest_path = shard1 / "manifests/run.json"
+                shard_manifest = json.loads(shard_manifest_path.read_text())
+                shard_manifest.pop("raw_content_sha256")
+                shard_manifest["status"] = "running"
+                shard_manifest_path.write_text(
+                    json.dumps(shard_manifest), encoding="utf-8"
+                )
+                run(config_path, "parallel", True, shard_index=1, shard_count=2)
+
+            self.assertEqual(len(generated), 401)
+            keys0 = set(scan_raw(shard0 / "raw"))
+            keys1 = set(scan_raw(shard1 / "raw"))
+            self.assertFalse(keys0 & keys1)
+            self.assertEqual(len(keys0 | keys1), 400)
+            self.assertEqual(
+                {key[2] for key in keys0}, {"tiny:0", "tiny:2"}
+            )
+            self.assertEqual(
+                {key[2] for key in keys1}, {"tiny:1", "tiny:3"}
+            )
+
+            with self.assertRaisesRegex(ValueError, "incomplete partitions"):
+                merge(root / "runs/missing", [shard0])
+            existing = root / "runs/existing"
+            existing.mkdir()
+            with self.assertRaisesRegex(FileExistsError, "refusing to overwrite"):
+                merge(existing, [shard0, shard1])
+
+            raw_path = next((shard0 / "raw").glob("**/part-*.jsonl"))
+            original = raw_path.read_bytes()
+            tampered = list(read_jsonl(raw_path))
+            tampered[0]["final_text"] = "\\boxed{5}"
+            raw_path.write_text(
+                "".join(json.dumps(row) + "\n" for row in tampered),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "raw content hash mismatch"):
+                merge(root / "runs/tampered", [shard0, shard1])
+            raw_path.write_bytes(original)
+
+            merged = merge(root / "runs/parallel", [shard1, shard0])
+            parsed_path, metrics_path = replay(merged, [1, 100])
+            self.assertEqual(len(list(read_jsonl(parsed_path))), 400)
+            self.assertEqual(json.loads(metrics_path.read_text())["sample_count"], 400)
+            manifest = json.loads((merged / "manifests/run.json").read_text())
+            self.assertEqual(manifest["run_id"], "parallel")
+            self.assertEqual(manifest["sample_count"], 400)
+            self.assertNotIn("partition", manifest)
+            self.assertNotIn("environment", manifest)
+            self.assertEqual(len(manifest["worker_environments"]), 2)
+            self.assertTrue(manifest["raw_content_sha256"])
 
 
 if __name__ == "__main__":

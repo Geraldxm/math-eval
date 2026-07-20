@@ -25,7 +25,14 @@ from inference import (
     validate_model,
 )
 from io_utils import atomic_json, read_jsonl, stable_hash, utc_now
-from resume import SCHEMA_VERSION, RawShardWriter, ensure_manifest, missing_indices, scan_raw
+from resume import (
+    SCHEMA_VERSION,
+    RawShardWriter,
+    ensure_manifest,
+    missing_indices,
+    scan_raw,
+    target_key,
+)
 
 
 TOP_LEVEL_FIELDS = {"dataset", "model", "prompt", "decode", "output"}
@@ -186,16 +193,42 @@ def raw_row(
     }
 
 
-def run(config_path: Path, run_id: str, resume: bool = False) -> Path:
+def _expected_keys(
+    rows: list[dict[str, Any]], model: str, dataset: str, samples_per_problem: int
+) -> set[tuple[str, str, str, int]]:
+    return {
+        target_key(model, dataset, f"{dataset}:{source['id']}", sample_idx)
+        for source in rows
+        for sample_idx in range(samples_per_problem)
+    }
+
+
+def run(
+    config_path: Path,
+    run_id: str,
+    resume: bool = False,
+    shard_index: int = 0,
+    shard_count: int = 1,
+) -> Path:
+    if shard_count < 1:
+        raise ValueError("shard_count must be >= 1")
+    if not 0 <= shard_index < shard_count:
+        raise ValueError("shard_index must satisfy 0 <= shard_index < shard_count")
     config_text = config_path.read_text(encoding="utf-8")
     config = load_config(config_path)
     rows = load_dataset(config["dataset"])
     dataset_sha256 = stable_hash(rows)
+    partition_rows = rows[shard_index::shard_count]
     prompt = load_prompt(config["prompt"], config["model"]["input_mode"])
     prompt_sha256 = stable_hash(prompt)
     thinking_preflight = preflight_model(config["model"])
     output = config["output"]
-    run_dir = Path(output["root"]).expanduser() / run_id
+    physical_run_id = (
+        run_id
+        if shard_count == 1
+        else f"{run_id}.part-{shard_index:05d}-of-{shard_count:05d}"
+    )
+    run_dir = Path(output["root"]).expanduser() / physical_run_id
     generation_spec = {
         "dataset": config["dataset"],
         "dataset_sha256": dataset_sha256,
@@ -219,6 +252,28 @@ def run(config_path: Path, run_id: str, resume: bool = False) -> Path:
             "sampling": sampling_request(config["decode"]),
         },
     }
+    model_name = str(config["model"]["name"])
+    dataset_name = str(config["dataset"]["name"])
+    samples_per_problem = int(config["decode"]["samples_per_problem"])
+    expected_keys = _expected_keys(
+        partition_rows, model_name, dataset_name, samples_per_problem
+    )
+    global_expected_keys = _expected_keys(
+        rows, model_name, dataset_name, samples_per_problem
+    )
+    partition_manifest = (
+        {
+            "partition": {"index": shard_index, "count": shard_count},
+            "expected_sample_count": len(expected_keys),
+            "global_expected_sample_count": len(global_expected_keys),
+            "expected_sample_keys_sha256": stable_hash(sorted(expected_keys)),
+            "global_expected_sample_keys_sha256": stable_hash(
+                sorted(global_expected_keys)
+            ),
+        }
+        if shard_count > 1
+        else {}
+    )
     manifest = ensure_manifest(
         run_dir,
         {
@@ -233,6 +288,7 @@ def run(config_path: Path, run_id: str, resume: bool = False) -> Path:
             "code_revision": code_revision(),
             "environment": environment_snapshot(),
             "thinking_preflight": thinking_preflight,
+            **partition_manifest,
         },
         generation_spec,
         config_text,
@@ -240,17 +296,15 @@ def run(config_path: Path, run_id: str, resume: bool = False) -> Path:
         resume,
     )
     completed = scan_raw(run_dir / "raw", recover_tail=True)
-    model_name = str(config["model"]["name"])
-    dataset_name = str(config["dataset"]["name"])
     work = []
-    for source in rows:
+    for source in partition_rows:
         uid = f"{dataset_name}:{source['id']}"
         for sample_idx in missing_indices(
             completed,
             model_name,
             dataset_name,
             uid,
-            int(config["decode"]["samples_per_problem"]),
+            samples_per_problem,
         ):
             work.append((source, sample_idx))
 
@@ -300,16 +354,28 @@ def run(config_path: Path, run_id: str, resume: bool = False) -> Path:
     ).close()
     if list(raw_dir.glob("part-*.jsonl.inprogress")):
         raise RuntimeError(f"{run_dir}: unsealed raw shard remains")
-    sample_count = len(scan_raw(run_dir / "raw"))
-    expected_count = len(rows) * int(config["decode"]["samples_per_problem"])
-    if sample_count != expected_count:
-        raise RuntimeError(f"{run_dir}: incomplete raw samples {sample_count}/{expected_count}")
+    completed = scan_raw(run_dir / "raw")
+    actual_keys = set(completed)
+    if actual_keys != expected_keys:
+        missing = len(expected_keys - actual_keys)
+        unexpected = len(actual_keys - expected_keys)
+        raise RuntimeError(
+            f"{run_dir}: raw sample keys do not match partition "
+            f"(missing={missing}, unexpected={unexpected})"
+        )
+    sample_count = len(actual_keys)
+    raw_content_sha256 = stable_hash(
+        [completed[key].row for key in sorted(completed)]
+    )
+    if manifest.get("raw_content_sha256") not in (None, raw_content_sha256):
+        raise RuntimeError(f"{run_dir}: raw content changed since completion")
 
     manifest.update(
         {
             "status": "completed",
             "completed_at": utc_now(),
             "sample_count": sample_count,
+            "raw_content_sha256": raw_content_sha256,
         }
     )
     atomic_json(run_dir / "manifests/run.json", manifest)
@@ -321,8 +387,16 @@ def main() -> int:
     argument_parser.add_argument("--config", type=Path, required=True)
     argument_parser.add_argument("--run-id", required=True)
     argument_parser.add_argument("--resume", action="store_true")
+    argument_parser.add_argument("--shard-index", type=int, default=0)
+    argument_parser.add_argument("--shard-count", type=int, default=1)
     args = argument_parser.parse_args()
-    run_dir = run(args.config, args.run_id, args.resume)
+    run_dir = run(
+        args.config,
+        args.run_id,
+        args.resume,
+        args.shard_index,
+        args.shard_count,
+    )
     print(json.dumps({"run_dir": str(run_dir), "status": "completed"}, ensure_ascii=False))
     return 0
 
