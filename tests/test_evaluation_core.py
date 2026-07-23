@@ -1,6 +1,7 @@
 import gzip
 import json
 import os
+import signal
 import sys
 import tempfile
 import threading
@@ -707,6 +708,138 @@ class ConfigFilesTest(unittest.TestCase):
 
 
 class PipelineTest(unittest.TestCase):
+    def test_banded_stop_resume_expand_and_sample_limit(self):
+        generated = []
+
+        class FakeBackend:
+            request_batch_size = 2
+            stop_after_batch = False
+
+            def generate(self, prompt, decode, sample_idx):
+                generated.append((prompt[-1]["content"], sample_idx))
+                return InferenceResult(
+                    raw_text="\\boxed{4}",
+                    reasoning_text=None,
+                    final_text="\\boxed{4}",
+                    thinking_status="non_thinking_ok",
+                    finish_reason="stop",
+                    prompt_tokens=3,
+                    output_tokens=2,
+                    response_id=str(len(generated)),
+                    resolved_request={},
+                )
+
+            def generate_batch(self, requests):
+                results = [self.generate(**request) for request in requests]
+                if self.stop_after_batch:
+                    self.stop_after_batch = False
+                    signal.raise_signal(signal.SIGTERM)
+                return results
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            dataset = root / "data.jsonl"
+            dataset.write_text(
+                '{"id":"1","problem":"first","answer":"4"}\n'
+                '{"id":"2","problem":"second","answer":"4"}\n',
+                encoding="utf-8",
+            )
+            prompt_dir = root / "prompt"
+            prompt_dir.mkdir()
+            (prompt_dir / "00-user.txt").write_text("{{problem}}", encoding="utf-8")
+            config = {
+                "dataset": {"name": "tiny", "path": str(dataset), "limit": 2},
+                "model": {
+                    "name": "fake",
+                    "backend": "vllm",
+                    "path": "unused",
+                    "input_mode": "chat",
+                    "thinking": False,
+                },
+                "prompt": str(prompt_dir),
+                "decode": decode_config(samples_per_problem=2),
+                "output": {
+                    "root": str(root / "runs"),
+                    "shard_size": 100,
+                    "compression": "none",
+                },
+            }
+            config_path = root / "config.yaml"
+            config_path.write_text(yaml.safe_dump(config), encoding="utf-8")
+            preflight = {
+                "applicable": True,
+                "configured": True,
+                "supported": True,
+                "requested": False,
+                "chat_template_sha256": "template-hash",
+            }
+            backend = FakeBackend()
+            with (
+                patch("evaluate.preflight_model", return_value=preflight),
+                patch("evaluate.create_backend", return_value=backend),
+            ):
+                run_dir = run(config_path, "expand", sample_band_size=2)
+                self.assertEqual(
+                    generated,
+                    [("first", 0), ("first", 1), ("second", 0), ("second", 1)],
+                )
+                config["decode"]["samples_per_problem"] = 4
+                config_path.write_text(yaml.safe_dump(config), encoding="utf-8")
+                run(config_path, "expand", True, sample_band_size=2)
+                self.assertEqual(
+                    generated[-4:],
+                    [("first", 2), ("first", 3), ("second", 2), ("second", 3)],
+                )
+                config["decode"]["samples_per_problem"] = 3
+                config_path.write_text(yaml.safe_dump(config), encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, "below existing"):
+                    run(config_path, "expand", True, sample_band_size=2)
+                config["decode"]["samples_per_problem"] = 4
+                config_path.write_text(yaml.safe_dump(config), encoding="utf-8")
+
+                raw_path = next(run_dir.glob("raw/**/*.jsonl"))
+                original = raw_path.read_bytes()
+                tampered = list(read_jsonl(raw_path))
+                tampered[0]["final_text"] = "\\boxed{5}"
+                raw_path.write_text(
+                    "".join(json.dumps(row) + "\n" for row in tampered),
+                    encoding="utf-8",
+                )
+                with self.assertRaisesRegex(RuntimeError, "raw content changed"):
+                    run(config_path, "expand", True, sample_band_size=2)
+                raw_path.write_bytes(original)
+
+                backend.stop_after_batch = True
+                stopped = run(config_path, "stopped", sample_band_size=2)
+                stopped_manifest = json.loads(
+                    (stopped / "manifests/run.json").read_text()
+                )
+                self.assertEqual(stopped_manifest["status"], "stopped")
+                self.assertEqual(stopped_manifest["sample_count"], 2)
+                self.assertEqual(stopped_manifest["common_sample_depth"], 0)
+                self.assertNotIn("process_id", stopped_manifest)
+                self.assertFalse(list(stopped.glob("raw/**/*.inprogress")))
+                run(config_path, "stopped", True, sample_band_size=2)
+
+                with patch(
+                    "evaluate.create_backend", side_effect=RuntimeError("backend failed")
+                ):
+                    with self.assertRaisesRegex(RuntimeError, "backend failed"):
+                        run(config_path, "failed", sample_band_size=2)
+                failed_manifest = json.loads(
+                    (root / "runs/failed/manifests/run.json").read_text()
+                )
+                self.assertEqual(failed_manifest["status"], "failed")
+                self.assertNotIn("process_id", failed_manifest)
+
+            manifest = json.loads((run_dir / "manifests/run.json").read_text())
+            self.assertEqual(manifest["status"], "completed")
+            self.assertEqual(manifest["target_samples_per_problem"], 4)
+            self.assertEqual(manifest["common_sample_depth"], 4)
+            self.assertEqual(len(scan_raw(run_dir / "raw")), 8)
+            parsed, _ = replay(run_dir, [1, 2], sample_limit=2)
+            self.assertEqual(len(list(read_jsonl(parsed))), 4)
+
     def test_generate_resume_and_replay_ready_raw(self):
         batch_calls = []
 
@@ -995,6 +1128,9 @@ class PipelineTest(unittest.TestCase):
             manifest = json.loads((merged / "manifests/run.json").read_text())
             self.assertEqual(manifest["run_id"], "parallel")
             self.assertEqual(manifest["sample_count"], 400)
+            self.assertEqual(manifest["target_sample_count"], 400)
+            self.assertEqual(manifest["common_sample_depth"], 100)
+            self.assertNotIn("process_id", manifest)
             self.assertNotIn("partition", manifest)
             self.assertNotIn("environment", manifest)
             self.assertEqual(len(manifest["worker_environments"]), 2)

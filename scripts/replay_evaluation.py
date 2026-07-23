@@ -30,7 +30,10 @@ def replay(
     run_dir: Path,
     k_values: list[int],
     parser_id: str = V5_DUAL_PARSER_ID,
+    sample_limit: int | None = None,
 ) -> tuple[Path, Path]:
+    if sample_limit is not None and sample_limit < 1:
+        raise ValueError("sample_limit must be >= 1")
     if parser_id not in {
         PARSER_ID,
         DUAL_PARSER_ID,
@@ -51,6 +54,28 @@ def replay(
     )
     if not raw_paths:
         raise ValueError(f"{run_dir}: no sealed raw JSONL shards")
+    manifest_path = run_dir / "manifests/run.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if sample_limit is not None:
+        counts: dict[str, int] = {}
+        for raw_path in raw_paths:
+            for row in read_jsonl(raw_path):
+                if int(row["sample_idx"]) < sample_limit:
+                    uid = str(row["problem_uid"])
+                    counts[uid] = counts.get(uid, 0) + 1
+        target = manifest.get("target_samples_per_problem")
+        target_count = manifest.get("target_sample_count")
+        expected_problems = (
+            int(target_count) // int(target)
+            if target and target_count and int(target_count) % int(target) == 0
+            else len(counts)
+        )
+        short = {uid: count for uid, count in counts.items() if count < sample_limit}
+        if short or len(counts) < expected_problems:
+            raise ValueError(
+                f"sample_limit={sample_limit} is not available for every problem "
+                f"(ready={len(counts) - len(short)}/{expected_problems}, short={short})"
+            )
     parsed_path = run_dir / "parsed" / parser_id / "parsed.jsonl"
     parser_config_hash = {
         PARSER_ID: PARSER_CONFIG_HASH,
@@ -62,6 +87,8 @@ def replay(
     def parsed_rows():
         for raw_path in raw_paths:
             for row in read_jsonl(raw_path):
+                if sample_limit is not None and int(row["sample_idx"]) >= sample_limit:
+                    continue
                 required = {"final_text", "gold_answer"}
                 missing = required - row.keys()
                 if missing:
@@ -108,12 +135,9 @@ def replay(
                         **asdict(result),
                         "parser_config_hash": parser_config_hash,
                     }
-
     count = write_jsonl(parsed_path, parsed_rows())
     metrics_path = run_dir / "metrics" / parser_id / "metrics.json"
     metrics_file([parsed_path], metrics_path, k_values)
-    manifest_path = run_dir / "manifests/run.json"
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     manifest.update(
         {
             "evaluation_status": "completed",
@@ -123,6 +147,7 @@ def replay(
             "parsed_rows": count,
             "parsed_path": str(parsed_path.relative_to(run_dir)),
             "metrics_path": str(metrics_path.relative_to(run_dir)),
+            "sample_limit": sample_limit,
         }
     )
     atomic_json(manifest_path, manifest)
@@ -138,8 +163,9 @@ def main() -> int:
         choices=(PARSER_ID, DUAL_PARSER_ID, V5_DUAL_PARSER_ID, V51_DUAL_PARSER_ID),
         default=V5_DUAL_PARSER_ID,
     )
+    argument_parser.add_argument("--sample-limit", type=int)
     args = argument_parser.parse_args()
-    parsed, metrics = replay(args.run_dir, args.k, args.parser_id)
+    parsed, metrics = replay(args.run_dir, args.k, args.parser_id, args.sample_limit)
     print(json.dumps({"parsed": str(parsed), "metrics": str(metrics)}, ensure_ascii=False))
     return 0
 

@@ -199,6 +199,7 @@ def merge(output: Path, shard_dirs: list[Path]) -> Path:
             "expected_sample_keys_sha256",
             "global_expected_sample_keys_sha256",
             "environment",
+            "process_id",
         ):
             merged_manifest.pop(field, None)
         merged_manifest.update(
@@ -206,6 +207,11 @@ def merge(output: Path, shard_dirs: list[Path]) -> Path:
                 "status": "completed",
                 "completed_at": utc_now(),
                 "sample_count": len(all_keys),
+                "target_sample_count": len(all_keys),
+                "common_sample_depth": min(
+                    int(manifest.get("common_sample_depth", 0))
+                    for _index, (_run_dir, manifest) in sorted(shards.items())
+                ),
                 "raw_content_sha256": _raw_content_sha256(all_rows),
                 "worker_environments": [
                     {"partition": index, "environment": manifest["environment"]}

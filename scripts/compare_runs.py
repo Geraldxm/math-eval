@@ -28,7 +28,15 @@ def load_run(path: Path, k: int) -> dict[str, Any]:
             row["parser_id"],
             row["parser_config_hash"],
         )
-        decode_hashes.add(stable_hash(row["decode"]))
+        decode_hashes.add(
+            stable_hash(
+                {
+                    key: value
+                    for key, value in row["decode"].items()
+                    if key != "samples_per_problem"
+                }
+            )
+        )
     if len(decode_hashes) != 1:
         raise ValueError(f"{path}: run has mixed decode semantics")
     solved = set()

@@ -138,6 +138,37 @@ wait
 
 高采样测试只需在配置中设置 `decode.samples_per_problem: 100`。跨机器运行使用相同配置、run ID、shard count 和不同 shard index，完成后将所有 part 目录复制到同一机器再显式执行合并；合并器会拒绝缺失、重复、未完成、hash 不一致、代码 revision 不一致或 Python/核心包版本不一致的分片。manifest 目前只记录 checkpoint 路径而不 fingerprint 权重内容，因此跨机器必须使用相同的 clean commit，并自行确保该路径对应完全相同的模型权重。
 
+高采样 run 默认按每题 64 个 sample 的 band 推进；可用
+`--sample-band-size 16` 调小停止粒度。vLLM 运行应只向 manifest 中的父
+`process_id` 发送 SIGTERM；程序会完成当前 backend batch、封存 raw shard，
+并把 manifest 标记为 `stopped`。修改配置中的
+`decode.samples_per_problem` 后，以同一 run ID 加 `--resume` 可继续补齐，例如
+`256 -> 512` 时只生成 `sample_idx=256..511`。
+
+运行中可直接观察已落盘数量和所有题都达到的共同深度：
+
+```bash
+watch -n 2 'jq "{status,process_id,sample_count,target_sample_count,common_sample_depth}" outputs/runs/RUN_ID/manifests/run.json'
+```
+
+停止命令：
+
+```bash
+kill -TERM "$(jq -r .process_id outputs/runs/RUN_ID/manifests/run.json)"
+```
+
+断电、节点故障或进程被强杀时不需要先 seal。恢复后使用相同 config、run ID
+和 shard 参数，加 `--resume` 即可；程序会修剪 `.jsonl.inprogress` 中损坏的
+最后一行，并按 sample key 只补尚未落盘的请求。默认 `fsync_every: 1` 提供最小
+断电丢失窗口。
+
+若停止时有一个 backend batch 的少量超采样，可保留它们，并用共同前缀重放：
+
+```bash
+.venv/bin/python scripts/replay_evaluation.py \
+  --run-dir outputs/runs/RUN_ID --sample-limit 256 --k 1 16 64 256
+```
+
 DeepSeek API：
 
 ```bash

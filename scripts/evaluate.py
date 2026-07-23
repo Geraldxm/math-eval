@@ -6,9 +6,12 @@ from __future__ import annotations
 import argparse
 import importlib.metadata
 import json
+import os
 import platform
 import re
+import signal
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -209,11 +212,14 @@ def run(
     resume: bool = False,
     shard_index: int = 0,
     shard_count: int = 1,
+    sample_band_size: int = 64,
 ) -> Path:
     if shard_count < 1:
         raise ValueError("shard_count must be >= 1")
     if not 0 <= shard_index < shard_count:
         raise ValueError("shard_index must satisfy 0 <= shard_index < shard_count")
+    if sample_band_size < 1:
+        raise ValueError("sample_band_size must be >= 1")
     config_text = config_path.read_text(encoding="utf-8")
     config = load_config(config_path)
     rows = load_dataset(config["dataset"])
@@ -234,7 +240,11 @@ def run(
         "dataset_sha256": dataset_sha256,
         "model": config["model"],
         "prompt_sha256": prompt_sha256,
-        "decode": config["decode"],
+        "decode": {
+            key: value
+            for key, value in config["decode"].items()
+            if key != "samples_per_problem"
+        },
         "output": {
             "shard_size": int(output.get("shard_size", 100)),
             "compression": output.get("compression", "none"),
@@ -255,6 +265,23 @@ def run(
     model_name = str(config["model"]["name"])
     dataset_name = str(config["dataset"]["name"])
     samples_per_problem = int(config["decode"]["samples_per_problem"])
+    manifest_path = run_dir / "manifests/run.json"
+    if resume and manifest_path.exists():
+        existing = json.loads(manifest_path.read_text(encoding="utf-8"))
+        snapshot_path = run_dir / "manifests/config.yaml"
+        snapshot = (
+            yaml.safe_load(snapshot_path.read_text(encoding="utf-8"))
+            if snapshot_path.exists()
+            else None
+        )
+        if isinstance(snapshot, dict) and isinstance(snapshot.get("decode"), dict):
+            legacy_spec = dict(generation_spec)
+            legacy_spec["decode"] = dict(config["decode"])
+            legacy_spec["decode"]["samples_per_problem"] = int(
+                snapshot["decode"]["samples_per_problem"]
+            )
+            if existing.get("generation_spec_hash") == stable_hash(legacy_spec):
+                generation_spec = legacy_spec
     expected_keys = _expected_keys(
         partition_rows, model_name, dataset_name, samples_per_problem
     )
@@ -296,6 +323,26 @@ def run(
         resume,
     )
     completed = scan_raw(run_dir / "raw", recover_tail=True)
+    recorded_raw_hash = manifest.get("raw_content_sha256")
+    if recorded_raw_hash is not None:
+        current_raw_hash = stable_hash(
+            [completed[key].row for key in sorted(completed)]
+        )
+        if current_raw_hash != recorded_raw_hash:
+            raise RuntimeError(f"{run_dir}: raw content changed since completion")
+    problem_uids = {f"{dataset_name}:{source['id']}" for source in partition_rows}
+    existing_indices = [
+        key[3]
+        for key in completed
+        if key[0] == model_name
+        and key[1] == dataset_name
+        and key[2] in problem_uids
+    ]
+    if existing_indices and max(existing_indices) >= samples_per_problem:
+        raise ValueError(
+            f"target samples_per_problem={samples_per_problem} is below existing "
+            f"sample_idx={max(existing_indices)}; use replay --sample-limit instead"
+        )
     work = []
     for source in partition_rows:
         uid = f"{dataset_name}:{source['id']}"
@@ -307,43 +354,137 @@ def run(
             samples_per_problem,
         ):
             work.append((source, sample_idx))
+    work.sort(key=lambda item: item[1] // sample_band_size)
 
     raw_dir = run_dir / "raw" / safe_name(model_name) / safe_name(dataset_name)
+    indices_by_problem = {
+        f"{dataset_name}:{source['id']}": {
+            key[3] for key in completed if key[2] == f"{dataset_name}:{source['id']}"
+        }
+        for source in partition_rows
+    }
+    depths = {}
+    for uid, indices in indices_by_problem.items():
+        depth = 0
+        while depth in indices:
+            depth += 1
+        depths[uid] = depth
+    sample_count = len(completed)
+
+    def update_progress(status: str) -> None:
+        manifest.update({
+            **partition_manifest,
+            "status": status,
+            "sample_count": sample_count,
+            "target_samples_per_problem": samples_per_problem,
+            "target_sample_count": len(expected_keys),
+            "common_sample_depth": min(depths.values(), default=0),
+            "sample_band_size": sample_band_size,
+            "updated_at": utc_now(),
+        })
+        if status == "running":
+            manifest["process_id"] = os.getpid()
+        else:
+            manifest.pop("process_id", None)
+        atomic_json(manifest_path, manifest)
+
+    for key in (
+        "completed_at",
+        "stopped_at",
+        "failed_at",
+        "raw_content_sha256",
+        "evaluation_status",
+        "evaluated_at",
+        "parser_id",
+        "parser_config_hash",
+        "parsed_rows",
+        "parsed_path",
+        "metrics_path",
+        "sample_limit",
+    ):
+        manifest.pop(key, None)
+    update_progress("running")
+    stop_requested = False
+    previous_sigint = signal.getsignal(signal.SIGINT)
+    previous_sigterm = signal.getsignal(signal.SIGTERM)
+
+    def request_stop(_signum, _frame) -> None:
+        nonlocal stop_requested
+        if stop_requested:
+            raise KeyboardInterrupt
+        stop_requested = True
+        print(
+            "Stop requested; finishing the current backend batch and sealing raw data.",
+            file=sys.stderr,
+            flush=True,
+        )
+
+    signal.signal(signal.SIGTERM, request_stop)
+    signal.signal(
+        signal.SIGINT,
+        signal.SIG_IGN if config["model"]["backend"] == "vllm" else request_stop,
+    )
     if work:
-        backend = create_backend(config["model"], thinking_preflight)
-        request_batch_size = getattr(backend, "request_batch_size", 1)
-        with RawShardWriter(
-            raw_dir,
-            shard_size=int(output.get("shard_size", 100)),
-            compression=output.get("compression", "none"),
-            fsync_every=int(output.get("fsync_every", 1)),
-        ) as writer:
-            for offset in range(0, len(work), request_batch_size):
-                batch = work[offset : offset + request_batch_size]
-                requests = [
-                    {
-                        "prompt": render_prompt(prompt, str(source["problem"])),
-                        "decode": config["decode"],
-                        "sample_idx": sample_idx,
-                    }
-                    for source, sample_idx in batch
-                ]
-                if request_batch_size > 1:
-                    results = backend.generate_batch(requests)
-                else:
-                    results = [backend.generate(**requests[0])]
-                for (source, sample_idx), result in zip(batch, results, strict=True):
-                    writer.append(
-                        raw_row(
-                            run_id,
-                            config["dataset"],
-                            config["model"],
-                            config["decode"],
-                            source,
-                            sample_idx,
-                            result,
+        try:
+            backend = create_backend(config["model"], thinking_preflight)
+            request_batch_size = getattr(backend, "request_batch_size", 1)
+            with RawShardWriter(
+                raw_dir,
+                shard_size=int(output.get("shard_size", 100)),
+                compression=output.get("compression", "none"),
+                fsync_every=int(output.get("fsync_every", 1)),
+            ) as writer:
+                for offset in range(0, len(work), request_batch_size):
+                    if stop_requested:
+                        break
+                    batch = work[offset : offset + request_batch_size]
+                    requests = [
+                        {
+                            "prompt": render_prompt(prompt, str(source["problem"])),
+                            "decode": config["decode"],
+                            "sample_idx": sample_idx,
+                        }
+                        for source, sample_idx in batch
+                    ]
+                    if request_batch_size > 1:
+                        results = backend.generate_batch(requests)
+                    else:
+                        results = [backend.generate(**requests[0])]
+                    for (source, sample_idx), result in zip(
+                        batch, results, strict=True
+                    ):
+                        writer.append(
+                            raw_row(
+                                run_id,
+                                config["dataset"],
+                                config["model"],
+                                config["decode"],
+                                source,
+                                sample_idx,
+                                result,
+                            )
                         )
-                    )
+                        uid = f"{dataset_name}:{source['id']}"
+                        indices_by_problem[uid].add(sample_idx)
+                        sample_count += 1
+                        while depths[uid] in indices_by_problem[uid]:
+                            depths[uid] += 1
+                    update_progress("running")
+                    if stop_requested:
+                        break
+        except BaseException:
+            signal.signal(signal.SIGINT, previous_sigint)
+            signal.signal(signal.SIGTERM, previous_sigterm)
+            manifest.update({"status": "failed", "failed_at": utc_now()})
+            manifest.pop("process_id", None)
+            atomic_json(manifest_path, manifest)
+            raise
+
+    manifest.update({"status": "finalizing", "updated_at": utc_now()})
+    manifest.pop("process_id", None)
+    atomic_json(manifest_path, manifest)
+    signal.signal(signal.SIGINT, previous_sigint)
+    signal.signal(signal.SIGTERM, previous_sigterm)
 
     # Seal a fully written active shard even when resume found no missing work.
     RawShardWriter(
@@ -356,12 +497,24 @@ def run(
         raise RuntimeError(f"{run_dir}: unsealed raw shard remains")
     completed = scan_raw(run_dir / "raw")
     actual_keys = set(completed)
-    if actual_keys != expected_keys:
+    if stop_requested:
+        manifest["stopped_at"] = utc_now()
+        update_progress("stopped")
+        return run_dir
+    invalid_keys = {
+        key
+        for key in actual_keys
+        if key[0] != model_name
+        or key[1] != dataset_name
+        or key[2] not in problem_uids
+        or key[3] < 0
+    }
+    if actual_keys != expected_keys or invalid_keys:
         missing = len(expected_keys - actual_keys)
         unexpected = len(actual_keys - expected_keys)
         raise RuntimeError(
             f"{run_dir}: raw sample keys do not match partition "
-            f"(missing={missing}, unexpected={unexpected})"
+            f"(missing={missing}, unexpected={unexpected}, invalid={len(invalid_keys)})"
         )
     sample_count = len(actual_keys)
     raw_content_sha256 = stable_hash(
@@ -378,6 +531,7 @@ def run(
             "raw_content_sha256": raw_content_sha256,
         }
     )
+    manifest.pop("process_id", None)
     atomic_json(run_dir / "manifests/run.json", manifest)
     return run_dir
 
@@ -389,6 +543,7 @@ def main() -> int:
     argument_parser.add_argument("--resume", action="store_true")
     argument_parser.add_argument("--shard-index", type=int, default=0)
     argument_parser.add_argument("--shard-count", type=int, default=1)
+    argument_parser.add_argument("--sample-band-size", type=int, default=64)
     args = argument_parser.parse_args()
     run_dir = run(
         args.config,
@@ -396,9 +551,12 @@ def main() -> int:
         args.resume,
         args.shard_index,
         args.shard_count,
+        args.sample_band_size,
     )
-    print(json.dumps({"run_dir": str(run_dir), "status": "completed"}, ensure_ascii=False))
-    return 0
+    manifest = json.loads((run_dir / "manifests/run.json").read_text(encoding="utf-8"))
+    status = manifest["status"]
+    print(json.dumps({"run_dir": str(run_dir), "status": status}, ensure_ascii=False))
+    return 130 if status == "stopped" else 0
 
 
 if __name__ == "__main__":
