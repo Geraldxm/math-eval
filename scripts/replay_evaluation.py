@@ -25,11 +25,13 @@ from parser import (
     parse_v51_dual_and_verify,
 )
 
+DEFAULT_PARSER_ID = V51_DUAL_PARSER_ID
+
 
 def replay(
     run_dir: Path,
     k_values: list[int],
-    parser_id: str = V5_DUAL_PARSER_ID,
+    parser_id: str = DEFAULT_PARSER_ID,
     sample_limit: int | None = None,
 ) -> tuple[Path, Path]:
     if sample_limit is not None and sample_limit < 1:
@@ -161,7 +163,7 @@ def main() -> int:
     argument_parser.add_argument(
         "--parser-id",
         choices=(PARSER_ID, DUAL_PARSER_ID, V5_DUAL_PARSER_ID, V51_DUAL_PARSER_ID),
-        default=V5_DUAL_PARSER_ID,
+        default=DEFAULT_PARSER_ID,
     )
     argument_parser.add_argument("--sample-limit", type=int)
     args = argument_parser.parse_args()

@@ -987,7 +987,7 @@ class PipelineTest(unittest.TestCase):
             parsed_rows = list(read_jsonl(parsed_path))
             self.assertEqual(len(parsed_rows), 2)
             self.assertTrue(
-                all(row["parser_id"] == V5_DUAL_PARSER_ID for row in parsed_rows)
+                all(row["parser_id"] == V51_DUAL_PARSER_ID for row in parsed_rows)
             )
             self.assertTrue(
                 all(
