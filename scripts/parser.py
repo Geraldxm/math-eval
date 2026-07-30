@@ -9,6 +9,7 @@ from dataclasses import asdict, dataclass
 
 from math_verify import ExprExtractionConfig, LatexExtractionConfig, parse, verify
 from math_verify.errors import TimeoutException
+from math_verify.utils import timeout
 
 from io_utils import stable_hash
 
@@ -17,6 +18,8 @@ PARSER_ID = "math-v3"
 DUAL_PARSER_ID = "math-v4-dual"
 V5_DUAL_PARSER_ID = "math-v5-dual"
 V51_DUAL_PARSER_ID = "math-v5.1-dual"
+V52_DUAL_PARSER_ID = "math-v5.2-dual"
+NORMALIZATION_TIMEOUT_SECONDS = 5
 MATH_VERIFY_VERSION = importlib.metadata.version("math-verify")
 EXTRACTION_CONFIG = (
     LatexExtractionConfig(boxed_match_priority=0),
@@ -72,6 +75,22 @@ V51_DUAL_PARSER_CONFIG_HASH = stable_hash(
         "gold_math_environment": True,
         "raise_on_error": True,
         "failure_handling": "timeout_and_normalization_errors_to_verdict",
+    }
+)
+V52_DUAL_PARSER_CONFIG_HASH = stable_hash(
+    {
+        "parser_id": V52_DUAL_PARSER_ID,
+        "math_verify_version": MATH_VERIFY_VERSION,
+        "extraction_config": [asdict(config) for config in EXTRACTION_CONFIG],
+        "strict_candidate_selection": "last_complete_boxed_only",
+        "strict_markers": ["boxed"],
+        "strict_brace_matching": "balanced_unescaped_braces",
+        "soft_candidate_selection": "strict_candidate_else_full_final_text",
+        "truncated_affects_candidate": False,
+        "gold_math_environment": True,
+        "raise_on_error": True,
+        "failure_handling": "timeout_and_normalization_errors_to_verdict",
+        "prediction_normalization_timeout_seconds": NORMALIZATION_TIMEOUT_SECONDS,
     }
 )
 
@@ -225,6 +244,7 @@ def _verify_candidate(
     parsed_gold: list,
     normalized_gold: str,
     safe: bool = False,
+    normalization_timeout_seconds: int | None = None,
 ) -> Verdict:
     if candidate is None:
         return _no_candidate(normalized_gold)
@@ -270,7 +290,13 @@ def _verify_candidate(
         )
 
     try:
-        normalized_prediction = str(parsed_prediction)
+        normalized_prediction = (
+            timeout(timeout_seconds=normalization_timeout_seconds)(str)(
+                parsed_prediction
+            )
+            if normalization_timeout_seconds is not None
+            else str(parsed_prediction)
+        )
     except (Exception, TimeoutException) as exc:
         if not safe:
             raise
@@ -333,6 +359,7 @@ def _parse_dual(
     gold: str,
     boxed: str | None,
     safe: bool = False,
+    normalization_timeout_seconds: int | None = None,
 ) -> DualParseResult:
     parsed_gold = _parse_gold(gold)
     normalized_gold = str(parsed_gold)
@@ -343,6 +370,7 @@ def _parse_dual(
             parsed_gold,
             normalized_gold,
             safe,
+            normalization_timeout_seconds,
         )
         return DualParseResult(strict=verdict, soft=verdict)
 
@@ -355,6 +383,7 @@ def _parse_dual(
         parsed_gold,
         normalized_gold,
         safe,
+        normalization_timeout_seconds,
     )
     return DualParseResult(strict=strict, soft=soft)
 
@@ -381,3 +410,17 @@ def parse_v51_dual_and_verify(
     truncated: bool = False,
 ) -> DualParseResult:
     return _parse_dual(final_text, gold, last_v5_strict_boxed(final_text), safe=True)
+
+
+def parse_v52_dual_and_verify(
+    final_text: str,
+    gold: str,
+    truncated: bool = False,
+) -> DualParseResult:
+    return _parse_dual(
+        final_text,
+        gold,
+        last_v5_strict_boxed(final_text),
+        safe=True,
+        normalization_timeout_seconds=NORMALIZATION_TIMEOUT_SECONDS,
+    )

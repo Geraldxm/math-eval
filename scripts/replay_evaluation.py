@@ -19,13 +19,16 @@ from parser import (
     V5_DUAL_PARSER_ID,
     V51_DUAL_PARSER_CONFIG_HASH,
     V51_DUAL_PARSER_ID,
+    V52_DUAL_PARSER_CONFIG_HASH,
+    V52_DUAL_PARSER_ID,
     parse_and_verify,
     parse_dual_and_verify,
     parse_v5_dual_and_verify,
     parse_v51_dual_and_verify,
+    parse_v52_dual_and_verify,
 )
 
-DEFAULT_PARSER_ID = V51_DUAL_PARSER_ID
+DEFAULT_PARSER_ID = V52_DUAL_PARSER_ID
 
 
 def replay(
@@ -41,6 +44,7 @@ def replay(
         DUAL_PARSER_ID,
         V5_DUAL_PARSER_ID,
         V51_DUAL_PARSER_ID,
+        V52_DUAL_PARSER_ID,
     }:
         raise ValueError(f"unsupported parser_id: {parser_id}")
     active_paths = sorted(run_dir.glob("raw/**/*.jsonl.inprogress"))
@@ -84,6 +88,7 @@ def replay(
         DUAL_PARSER_ID: DUAL_PARSER_CONFIG_HASH,
         V5_DUAL_PARSER_ID: V5_DUAL_PARSER_CONFIG_HASH,
         V51_DUAL_PARSER_ID: V51_DUAL_PARSER_CONFIG_HASH,
+        V52_DUAL_PARSER_ID: V52_DUAL_PARSER_CONFIG_HASH,
     }[parser_id]
 
     def parsed_rows():
@@ -116,11 +121,13 @@ def replay(
                     DUAL_PARSER_ID,
                     V5_DUAL_PARSER_ID,
                     V51_DUAL_PARSER_ID,
+                    V52_DUAL_PARSER_ID,
                 }:
                     parser = {
                         DUAL_PARSER_ID: parse_dual_and_verify,
                         V5_DUAL_PARSER_ID: parse_v5_dual_and_verify,
                         V51_DUAL_PARSER_ID: parse_v51_dual_and_verify,
+                        V52_DUAL_PARSER_ID: parse_v52_dual_and_verify,
                     }[parser_id]
                     result = parser(*arguments)
                     yield {
@@ -162,7 +169,13 @@ def main() -> int:
     argument_parser.add_argument("--k", type=int, nargs="+", default=[1])
     argument_parser.add_argument(
         "--parser-id",
-        choices=(PARSER_ID, DUAL_PARSER_ID, V5_DUAL_PARSER_ID, V51_DUAL_PARSER_ID),
+        choices=(
+            PARSER_ID,
+            DUAL_PARSER_ID,
+            V5_DUAL_PARSER_ID,
+            V51_DUAL_PARSER_ID,
+            V52_DUAL_PARSER_ID,
+        ),
         default=DEFAULT_PARSER_ID,
     )
     argument_parser.add_argument("--sample-limit", type=int)

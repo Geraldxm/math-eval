@@ -183,7 +183,7 @@ API key 仅从 `DEEPSEEK_API_KEY` 环境变量读取，不写入配置或产物�
 
 生成产物（raw shards）冻结后，解析与判分可独立、反复执行。更换 parser 或验证规则不需要重新调用模型。
 
-默认使用 `math-v5.1-dual`：boxed-only strict 是正式分数，无完整 `\boxed{}` 时的全文 soft 结果只作诊断。它与冻结的 `math-v5-dual` 保持相同抽取和判分规则，仅将 candidate parse/verify timeout 和 prediction normalization 异常记录为错误 verdict，避免整次 replay 中断；需要复现旧合同可显式传入 `--parser-id math-v5-dual`。
+默认使用 `math-v5.2-dual`：boxed-only strict 是正式分数，无完整 `\boxed{}` 时的全文 soft 结果只作诊断。它保持 v5.1 的抽取和判分规则，并为 prediction normalization 增加 5 秒硬超时，超时记录为 `parse_error`，避免病态 SymPy 表达式卡住整个 replay。需要复现旧合同可显式传入 `--parser-id math-v5.1-dual` 或 `--parser-id math-v5-dual`。
 
 ```bash
 .venv/bin/python scripts/replay_evaluation.py \

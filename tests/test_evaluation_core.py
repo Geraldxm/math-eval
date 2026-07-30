@@ -43,10 +43,13 @@ from parser import (
     V5_DUAL_PARSER_ID,
     V51_DUAL_PARSER_CONFIG_HASH,
     V51_DUAL_PARSER_ID,
+    V52_DUAL_PARSER_CONFIG_HASH,
+    V52_DUAL_PARSER_ID,
     parse_and_verify,
     parse_dual_and_verify,
     parse_v5_dual_and_verify,
     parse_v51_dual_and_verify,
+    parse_v52_dual_and_verify,
 )
 from replay_evaluation import replay
 from resume import RawShardWriter, scan_raw
@@ -567,6 +570,18 @@ class ParserAndMetricsTest(unittest.TestCase):
             V51_DUAL_PARSER_CONFIG_HASH,
             "e732b5ad06825d23fdbddd293d69f40b7fa9643c4a8c96b3e4baf53269d4b5e2",
         )
+        pathological = (
+            "38016000000000000**\n524. **20528640000000000 + 20528"
+        )
+        guarded = parse_v52_dual_and_verify(pathological, "103", truncated=True)
+        self.assertEqual(guarded.strict.status, "no_candidate")
+        self.assertEqual(guarded.soft.status, "parse_error")
+        self.assertIn("TimeoutException", guarded.soft.error)
+        self.assertEqual(V52_DUAL_PARSER_ID, "math-v5.2-dual")
+        self.assertEqual(
+            V52_DUAL_PARSER_CONFIG_HASH,
+            "e0b9e40ca45b1844b4a1d31252988bab15083be80615d3e9649b71ffb1f2cc22",
+        )
 
     def test_metrics_and_compare_compatibility(self):
         rows = []
@@ -987,7 +1002,7 @@ class PipelineTest(unittest.TestCase):
             parsed_rows = list(read_jsonl(parsed_path))
             self.assertEqual(len(parsed_rows), 2)
             self.assertTrue(
-                all(row["parser_id"] == V51_DUAL_PARSER_ID for row in parsed_rows)
+                all(row["parser_id"] == V52_DUAL_PARSER_ID for row in parsed_rows)
             )
             self.assertTrue(
                 all(
