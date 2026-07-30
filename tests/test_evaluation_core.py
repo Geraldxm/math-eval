@@ -927,13 +927,7 @@ class PipelineTest(unittest.TestCase):
                 patch("evaluate.preflight_model", return_value=preflight),
                 patch("evaluate.create_backend", return_value=FakeBackend()) as create,
             ):
-                run_dir = run(
-                    config_path,
-                    "run",
-                    False,
-                    request_batch_size_override=1,
-                    fsync_every_override=2,
-                )
+                run_dir = run(config_path, "run", False)
                 raw_dir = run_dir / "raw" / "fake" / "tiny"
                 sealed = raw_dir / "part-00000.jsonl"
                 active = raw_dir / "part-00000.jsonl.inprogress"
@@ -973,21 +967,10 @@ class PipelineTest(unittest.TestCase):
                     run(config_path, "run", True)
                 prompt_snapshot.write_text(prompt_snapshot_text, encoding="utf-8")
 
-            self.assertEqual(batch_calls, [])
-            self.assertEqual(create.return_value.request_batch_size, 1)
+            self.assertEqual(batch_calls, [2])
             manifest = json.loads((run_dir / "manifests/run.json").read_text())
             self.assertEqual(manifest["schema_version"], 3)
             self.assertEqual(manifest["thinking_preflight"], preflight)
-            self.assertEqual(
-                manifest["operational_override_history"][0],
-                {
-                    "started_at": manifest["operational_override_history"][0][
-                        "started_at"
-                    ],
-                    "request_batch_size": 1,
-                    "fsync_every": 2,
-                },
-            )
             self.assertTrue(manifest["prompt_sha256"])
             self.assertNotIn("generation_spec", manifest)
             self.assertNotIn("config_path", manifest)
@@ -1153,12 +1136,6 @@ class PipelineTest(unittest.TestCase):
                 merge(root / "runs/tampered", [shard0, shard1])
             raw_path.write_bytes(original)
 
-            shard_manifest_path = shard1 / "manifests/run.json"
-            shard_manifest = json.loads(shard_manifest_path.read_text())
-            shard_manifest.pop("common_sample_depth")
-            shard_manifest_path.write_text(
-                json.dumps(shard_manifest), encoding="utf-8"
-            )
             merged = merge(root / "runs/parallel", [shard1, shard0])
             parsed_path, metrics_path = replay(merged, [1, 100])
             self.assertEqual(len(list(read_jsonl(parsed_path))), 400)

@@ -213,8 +213,6 @@ def run(
     shard_index: int = 0,
     shard_count: int = 1,
     sample_band_size: int = 64,
-    request_batch_size_override: int | None = None,
-    fsync_every_override: int | None = None,
 ) -> Path:
     if shard_count < 1:
         raise ValueError("shard_count must be >= 1")
@@ -222,10 +220,6 @@ def run(
         raise ValueError("shard_index must satisfy 0 <= shard_index < shard_count")
     if sample_band_size < 1:
         raise ValueError("sample_band_size must be >= 1")
-    if request_batch_size_override is not None and request_batch_size_override < 1:
-        raise ValueError("request_batch_size_override must be >= 1")
-    if fsync_every_override is not None and fsync_every_override < 1:
-        raise ValueError("fsync_every_override must be >= 1")
     config_text = config_path.read_text(encoding="utf-8")
     config = load_config(config_path)
     rows = load_dataset(config["dataset"])
@@ -235,11 +229,6 @@ def run(
     prompt_sha256 = stable_hash(prompt)
     thinking_preflight = preflight_model(config["model"])
     output = config["output"]
-    fsync_every = (
-        fsync_every_override
-        if fsync_every_override is not None
-        else int(output.get("fsync_every", 1))
-    )
     physical_run_id = (
         run_id
         if shard_count == 1
@@ -333,18 +322,6 @@ def run(
         prompt,
         resume,
     )
-    operational_overrides = {
-        key: value
-        for key, value in {
-            "request_batch_size": request_batch_size_override,
-            "fsync_every": fsync_every_override,
-        }.items()
-        if value is not None
-    }
-    if operational_overrides:
-        manifest.setdefault("operational_override_history", []).append(
-            {"started_at": utc_now(), **operational_overrides}
-        )
     completed = scan_raw(run_dir / "raw", recover_tail=True)
     recorded_raw_hash = manifest.get("raw_content_sha256")
     if recorded_raw_hash is not None:
@@ -450,18 +427,12 @@ def run(
     if work:
         try:
             backend = create_backend(config["model"], thinking_preflight)
-            if request_batch_size_override is not None:
-                if not hasattr(backend, "request_batch_size"):
-                    raise ValueError(
-                        "request_batch_size_override requires a batched backend"
-                    )
-                backend.request_batch_size = request_batch_size_override
             request_batch_size = getattr(backend, "request_batch_size", 1)
             with RawShardWriter(
                 raw_dir,
                 shard_size=int(output.get("shard_size", 100)),
                 compression=output.get("compression", "none"),
-                fsync_every=fsync_every,
+                fsync_every=int(output.get("fsync_every", 1)),
             ) as writer:
                 for offset in range(0, len(work), request_batch_size):
                     if stop_requested:
@@ -520,7 +491,7 @@ def run(
         raw_dir,
         shard_size=int(output.get("shard_size", 100)),
         compression=output.get("compression", "none"),
-        fsync_every=fsync_every,
+        fsync_every=int(output.get("fsync_every", 1)),
     ).close()
     if list(raw_dir.glob("part-*.jsonl.inprogress")):
         raise RuntimeError(f"{run_dir}: unsealed raw shard remains")
@@ -573,8 +544,6 @@ def main() -> int:
     argument_parser.add_argument("--shard-index", type=int, default=0)
     argument_parser.add_argument("--shard-count", type=int, default=1)
     argument_parser.add_argument("--sample-band-size", type=int, default=64)
-    argument_parser.add_argument("--request-batch-size-override", type=int)
-    argument_parser.add_argument("--fsync-every-override", type=int)
     args = argument_parser.parse_args()
     run_dir = run(
         args.config,
@@ -583,8 +552,6 @@ def main() -> int:
         args.shard_index,
         args.shard_count,
         args.sample_band_size,
-        args.request_batch_size_override,
-        args.fsync_every_override,
     )
     manifest = json.loads((run_dir / "manifests/run.json").read_text(encoding="utf-8"))
     status = manifest["status"]
