@@ -88,6 +88,21 @@ def _raw_content_sha256(
     return stable_hash([rows[key] for key in sorted(rows)])
 
 
+def _common_sample_depth(
+    rows: dict[tuple[str, str, str, int], dict[str, Any]],
+) -> int:
+    indices_by_problem: dict[str, set[int]] = {}
+    for _model, _dataset, problem_uid, sample_idx in rows:
+        indices_by_problem.setdefault(problem_uid, set()).add(sample_idx)
+    depths = []
+    for indices in indices_by_problem.values():
+        depth = 0
+        while depth in indices:
+            depth += 1
+        depths.append(depth)
+    return min(depths, default=0)
+
+
 def merge(output: Path, shard_dirs: list[Path]) -> Path:
     if output.exists():
         raise FileExistsError(f"refusing to overwrite {output}")
@@ -208,10 +223,7 @@ def merge(output: Path, shard_dirs: list[Path]) -> Path:
                 "completed_at": utc_now(),
                 "sample_count": len(all_keys),
                 "target_sample_count": len(all_keys),
-                "common_sample_depth": min(
-                    int(manifest.get("common_sample_depth", 0))
-                    for _index, (_run_dir, manifest) in sorted(shards.items())
-                ),
+                "common_sample_depth": _common_sample_depth(all_rows),
                 "raw_content_sha256": _raw_content_sha256(all_rows),
                 "worker_environments": [
                     {"partition": index, "environment": manifest["environment"]}
