@@ -5,7 +5,7 @@ type: software
 authors:
   - family-names: Ge
     given-names: Xinmu
-    affiliation: "Shanghai Jiao Tong University; Shanghai Innovation Institute"
+    affiliation: "Shanghai Innovation Institute; Shanghai Jiao Tong University"
 repository-code: "https://github.com/Geraldxm/math-eval"
 url: "https://github.com/Geraldxm/math-eval"
 doi: 10.5281/zenodo.21411207
