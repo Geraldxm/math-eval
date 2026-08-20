@@ -34,6 +34,7 @@ decode:
   max_output_tokens: 1024           # 生成上限；>= 1。
   # min_output_tokens: 0            # 最少生成 token 数；省略即不传。
   # stop: ["<END>"]                 # 单个字符串或字符串列表；省略即不传。
+  # stop_token_ids: [151645]         # vLLM token ID 列表；special token 应使用此字段。
   # repetition_penalty: 1.0         # 省略即不传。
   # presence_penalty: 0.0           # 省略即不传。
   # frequency_penalty: 0.0          # 省略即不传。

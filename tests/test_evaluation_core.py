@@ -125,9 +125,17 @@ class ContractTest(unittest.TestCase):
                 load_dataset({"path": str(path)})
 
     def test_decode_mapping_and_omission(self):
-        request = sampling_request(decode_config(temperature=0.2, top_p=0.9, top_k=20))
+        request = sampling_request(
+            decode_config(
+                temperature=0.2,
+                top_p=0.9,
+                top_k=20,
+                stop_token_ids=[151645],
+            )
+        )
         self.assertEqual(request["max_tokens"], 32)
         self.assertEqual(request["top_k"], 20)
+        self.assertEqual(request["stop_token_ids"], [151645])
         self.assertNotIn("min_p", request)
         self.assertNotIn("presence_penalty", request)
         with self.assertRaisesRegex(ValueError, "unknown fields"):
@@ -136,6 +144,8 @@ class ContractTest(unittest.TestCase):
             sampling_request(decode_config(min_p=None))
         with self.assertRaisesRegex(ValueError, "missing fields"):
             sampling_request({"max_output_tokens": 1})
+        with self.assertRaisesRegex(ValueError, "stop_token_ids"):
+            sampling_request(decode_config(stop_token_ids=[True]))
 
     def test_openai_required_fields_fail_validation(self):
         complete = {
@@ -311,6 +321,17 @@ class OpenAIAdapterTest(unittest.TestCase):
         self.assertEqual(result.response_id, "123")
         self.assertEqual(result.thinking_status, "non_thinking_violation")
         self.assertNotIn("secret", json.dumps(result.as_dict()))
+
+    def test_stop_token_ids_require_provider_capability(self):
+        with (
+            patch.dict(os.environ, {"TEST_API_KEY": "secret"}),
+            self.assertRaisesRegex(ValueError, "stop_token_ids"),
+        ):
+            OpenAIBackend(self.model(1)).generate(
+                [{"role": "user", "content": "2+2?"}],
+                decode_config(stop_token_ids=[151645]),
+                0,
+            )
 
     def test_malformed_choice_is_rejected(self):
         MockHandler.attempts = 0
@@ -715,6 +736,7 @@ class ConfigFilesTest(unittest.TestCase):
             "min_p",
             "min_output_tokens",
             "stop",
+            "stop_token_ids",
             "repetition_penalty",
             "presence_penalty",
             "frequency_penalty",

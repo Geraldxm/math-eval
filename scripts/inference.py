@@ -28,6 +28,7 @@ DECODE_FIELDS = {
     "max_output_tokens",
     "min_output_tokens",
     "stop",
+    "stop_token_ids",
     "repetition_penalty",
     "presence_penalty",
     "frequency_penalty",
@@ -40,7 +41,13 @@ REQUIRED_DECODE_FIELDS = {
     "max_output_tokens",
     "samples_per_problem",
 }
-NON_STANDARD_API_FIELDS = {"top_k", "min_p", "min_output_tokens", "repetition_penalty"}
+NON_STANDARD_API_FIELDS = {
+    "top_k",
+    "min_p",
+    "min_output_tokens",
+    "stop_token_ids",
+    "repetition_penalty",
+}
 SOFT_THINKING_MARKERS = ("/think", "/no_think", "/nothink")
 PROBLEM_MARKER = "{{problem}}"
 MESSAGE_FILE = re.compile(r"^(\d+)-(system|user|assistant)\.txt$")
@@ -203,6 +210,15 @@ def validate_decode(value: dict[str, Any]) -> dict[str, Any]:
         and all(isinstance(item, str) for item in decode["stop"])
     ):
         raise ValueError("stop must be a string or list of strings")
+    if "stop_token_ids" in decode and not (
+        isinstance(decode["stop_token_ids"], list)
+        and decode["stop_token_ids"]
+        and all(
+            isinstance(item, int) and not isinstance(item, bool) and item >= 0
+            for item in decode["stop_token_ids"]
+        )
+    ):
+        raise ValueError("stop_token_ids must be a non-empty list of non-negative integers")
     for key in ("repetition_penalty", "presence_penalty", "frequency_penalty"):
         if key in decode:
             decode[key] = float(decode[key])
@@ -220,6 +236,7 @@ def sampling_request(decode: dict[str, Any], seed: int | None = None) -> dict[st
             "min_p",
             "min_output_tokens",
             "stop",
+            "stop_token_ids",
             "repetition_penalty",
             "presence_penalty",
             "frequency_penalty",

@@ -21,6 +21,7 @@ model:
   #   - top_k
   #   - min_p
   #   - min_output_tokens
+  #   - stop_token_ids
   #   - repetition_penalty
 
   # runtime:
@@ -36,6 +37,7 @@ decode:
   max_output_tokens: 16384          # 请求中的 max_tokens；>= 1。
   # min_output_tokens: 0            # 非标准 API 字段；需在 capabilities 声明。
   # stop: ["<END>"]                 # 单个字符串或字符串列表。
+  # stop_token_ids: [151645]         # 非标准 API 字段；需在 capabilities 声明。
   # repetition_penalty: 1.0         # 非标准 API 字段；需在 capabilities 声明。
   # presence_penalty: 0.0           # OpenAI-compatible 标准字段。
   # frequency_penalty: 0.0          # OpenAI-compatible 标准字段。
