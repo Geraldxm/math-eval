@@ -6,6 +6,10 @@
 
 Resumable, replayable math reasoning eval. Reads canonical JSONL, generates via vLLM or OpenAI-compatible API, then parses and scores independently.
 
+Technical report: [HTML landing page](https://geraldxm.github.io/math-eval/) · [PDF](https://geraldxm.github.io/math-eval/math-eval-v0.1.0.pdf)
+
+Build the local PDF report with `uv run --script docs/build_report.py`.
+
 ```text
 canonical JSONL -> evaluate.py -> raw shards -> replay_evaluation.py -> parsed + metrics
                                                         |
@@ -258,7 +262,8 @@ metrics 的 `pass@k` 使用每题全部样本的无偏估计；compare 的 solve
   author  = {Ge, Xinmu},
   title   = {math-eval: Reproducible Mathematical Reasoning Generation and Evaluation},
   year    = {2026},
-  doi     = {10.5281/zenodo.21411207},
+  version = {v0.1.0},
+  doi     = {10.5281/zenodo.21411208},
   url     = {https://github.com/Geraldxm/math-eval},
   license = {Apache-2.0}
 }

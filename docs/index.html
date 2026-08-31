@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Technical report for math-eval, a reproducible mathematical reasoning generation and evaluation workflow.">
+  <meta name="citation_title" content="math-eval: Reproducible Mathematical Reasoning Generation and Evaluation">
+  <meta name="citation_author" content="Ge, Xinmu">
+  <meta name="citation_publication_date" content="2026/08/31">
+  <meta name="citation_pdf_url" content="https://geraldxm.github.io/math-eval/math-eval-v0.1.0.pdf">
+  <title>math-eval: Reproducible Mathematical Reasoning Generation and Evaluation</title>
+  <style>
+    :root { --ink:#18212b; --muted:#5d6875; --line:#dbe1e7; --paper:#fff; --wash:#f5f7f9; --accent:#0b5cad; }
+    * { box-sizing:border-box; }
+    body { margin:0; color:var(--ink); background:var(--wash); font:17px/1.62 Georgia, "Times New Roman", serif; }
+    main { max-width:860px; margin:40px auto; padding:52px 64px; background:var(--paper); box-shadow:0 3px 18px #18212b16; }
+    h1,h2 { font-family:ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; line-height:1.2; }
+    h1 { margin:0 0 18px; font-size:clamp(2rem,5vw,3.3rem); letter-spacing:-.04em; }
+    h2 { margin:42px 0 12px; font-size:1.2rem; letter-spacing:-.015em; }
+    .meta,.label { font-family:ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; color:var(--muted); }
+    .meta { margin:0 0 22px; }
+    .label { font-size:.78rem; font-weight:700; letter-spacing:.08em; text-transform:uppercase; }
+    .authors { margin:0 0 26px; }
+    .actions { display:flex; flex-wrap:wrap; gap:10px; margin:28px 0 38px; }
+    .actions a { padding:9px 14px; border:1px solid var(--line); border-radius:5px; color:var(--accent); font:600 .9rem ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; text-decoration:none; }
+    .actions a:first-child { background:var(--accent); border-color:var(--accent); color:#fff; }
+    a { color:var(--accent); }
+    .pipeline { overflow:auto; padding:16px; background:var(--wash); border-left:3px solid #9cc2e7; font: .95rem/1.5 ui-monospace,SFMono-Regular,Menlo,monospace; }
+    footer { margin-top:44px; padding-top:18px; border-top:1px solid var(--line); color:var(--muted); font-size:.9rem; }
+    @media (max-width:650px) { main { margin:0; padding:34px 24px; box-shadow:none; } body { background:#fff; } }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="label">Software documentation report</div>
+    <h1>math-eval: Reproducible Mathematical Reasoning Generation and Evaluation</h1>
+    <p class="authors"><strong>Xinmu Ge</strong><br><span class="meta">Shanghai Innovation Institute · Shanghai Jiao Tong University<br>g3ra1d@sjtu.edu.cn · 31 August 2026 · Software documentation report</span></p>
+    <p><strong>Abstract.</strong> math-eval is a software workflow for reproducible evaluation of mathematical reasoning systems. It accepts canonical JSONL records, generates model outputs through vLLM or an OpenAI-compatible API, preserves raw sample artifacts, and replays parsing and scoring independently. This separation lets an evaluation change its parser or metrics without repeating model inference. The implementation records configuration, prompt, environment, and artifact hashes; supports resumable runs and deterministic data partitions; and validates shard merges before replay. Its default <code>math-v5.2-dual</code> contract reports boxed-only strict results as formal scores and retains whole-response soft results for diagnosis when no complete box is present. Mathematical equivalence is evaluated with Math-Verify 0.9.0. Canonical datasets are maintained separately by math-vault, preserving their provenance and licensing records.</p>
+    <div class="actions">
+      <a href="https://geraldxm.github.io/math-eval/math-eval-v0.1.0.pdf">Read the technical report (PDF)</a>
+      <a href="https://doi.org/10.5281/zenodo.21411208">Related software artifact DOI</a>
+      <a href="https://github.com/Geraldxm/math-eval">Source repository</a>
+    </div>
+    <h2>Workflow</h2>
+    <div class="pipeline">canonical JSONL → generation → raw artifacts → replay parser/scoring → parsed results and metrics</div>
+    <p>Generation writes raw shards, while replay reads the frozen artifacts to produce verdicts and aggregate metrics. This makes the generation and scoring stages independently repeatable.</p>
+    <h2>Reproducibility properties</h2>
+    <p>Each run stores manifest data with configuration and prompt snapshots, hashes, and environment information. Interrupted runs can resume using the same run identifier. Independent workers can process deterministic partitions; the merge step rejects missing, duplicate, incomplete, hash-inconsistent, revision-inconsistent, or environment-inconsistent shards.</p>
+    <h2>Evaluation semantics</h2>
+    <p>The default parser uses the last complete <code>\boxed{}</code> expression for the strict score. If no complete box exists, soft evaluation can inspect the nonempty full response for diagnostic purposes only. A five-second hard timeout during prediction normalization is recorded as a parse error, preventing one pathological expression from blocking replay.</p>
+    <h2>Data relationship and documented use</h2>
+    <p><a href="https://github.com/Geraldxm/math-vault">math-vault</a> maintains traceable snapshots of public mathematical reasoning datasets and their provenance; its canonical JSONL is a direct input to math-eval. The <a href="https://arxiv.org/abs/2608.11829">OPD paper</a> documents a use of the software and dataset artifacts. It is a use case, not an endorsement.</p>
+    <h2>How to cite</h2>
+    <p><strong>Software documentation report:</strong> Ge, X. (2026). <em>math-eval: Reproducible Mathematical Reasoning Generation and Evaluation</em>. Software documentation report, published 31 August 2026.</p>
+    <p><strong>Related software artifact:</strong> Ge, X. (2026). <em>math-eval: Reproducible Mathematical Reasoning Generation and Evaluation</em> (Version v0.1.0). Zenodo. <a href="https://doi.org/10.5281/zenodo.21411208">https://doi.org/10.5281/zenodo.21411208</a></p>
+    <p class="meta">Build the PDF locally with <code>uv run --script docs/build_report.py</code>.</p>
+    <footer>Software documentation report · Apache-2.0 · Related software artifact DOI: <a href="https://doi.org/10.5281/zenodo.21411208">10.5281/zenodo.21411208</a></footer>
+  </main>
+</body>
+</html>
