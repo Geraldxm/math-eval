@@ -1,0 +1,51 @@
+{
+  "draft_only": true,
+  "resource_type": "Publication → Technical note",
+  "title": "math-eval: Reproducible Mathematical Reasoning Generation and Evaluation",
+  "publication_date": "2026-08-31",
+  "creators": [
+    {
+      "family_name": "Ge",
+      "given_name": "Xinmu",
+      "affiliations": [
+        "Shanghai Innovation Institute",
+        "Shanghai Jiao Tong University"
+      ],
+      "orcid": null
+    }
+  ],
+  "description": "math-eval is a software workflow for reproducible evaluation of mathematical reasoning systems. It accepts canonical JSONL records, generates model outputs through vLLM or an OpenAI-compatible API, preserves raw sample artifacts, and replays parsing and scoring independently. This separation lets an evaluation change its parser or metrics without repeating model inference. The implementation records configuration, prompt, environment, and artifact hashes; supports resumable runs and deterministic data partitions; and validates shard merges before replay. Its default math-v5.2-dual contract reports boxed-only strict results as formal scores and retains whole-response soft results for diagnosis when no complete box is present. Mathematical equivalence is evaluated with Math-Verify 0.9.0. Canonical datasets are maintained separately by math-vault, preserving their provenance and licensing records.",
+  "keywords": [
+    "large language models",
+    "mathematical reasoning",
+    "evaluation",
+    "reproducibility",
+    "benchmarking"
+  ],
+  "license": "Apache-2.0",
+  "upload_file": {
+    "path": "docs/math-eval-v0.1.0.pdf",
+    "sha256": "d2808b05b39fcc959636769fabbfd451af8a5813de9323694549c3a4092ecd98"
+  },
+  "related_identifiers": [
+    {
+      "identifier": "10.5281/zenodo.21411208",
+      "scheme": "DOI",
+      "relation": "Documents",
+      "resource_type": "Software",
+      "label": "Versioned software artifact"
+    },
+    {
+      "identifier": "https://github.com/Geraldxm/math-eval/tree/v0.1.0",
+      "scheme": "URL",
+      "relation": "IsSupplementTo",
+      "resource_type": "Software",
+      "label": "Source code"
+    }
+  ],
+  "publish_checklist": [
+    "Confirm that this record is a separate publication record, not a new version of the software record.",
+    "Confirm the displayed citation and related identifiers.",
+    "Obtain author review before selecting Publish."
+  ]
+}

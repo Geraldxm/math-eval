@@ -1,0 +1,106 @@
+\documentclass[10pt,a4paper]{article}
+
+\usepackage[margin=2.35cm,top=2.15cm,bottom=2.2cm]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{microtype}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{needspace}
+\usepackage{xcolor}
+\usepackage{fancyhdr}
+\usepackage{hyperref}
+
+\hypersetup{
+  pdftitle={math-eval: Reproducible Mathematical Reasoning Generation and Evaluation},
+  pdfauthor={Xinmu Ge},
+  pdfsubject={Technical report for the math-eval software release},
+  pdfkeywords={mathematical reasoning, evaluation, reproducibility, software},
+  colorlinks=true,
+  linkcolor=black,
+  citecolor=blue!55!black,
+  urlcolor=blue!55!black
+}
+
+\definecolor{reportblue}{HTML}{174F7A}
+\setlength{\parindent}{1.25em}
+\setlength{\parskip}{0.25em}
+\setcounter{secnumdepth}{2}
+\renewcommand{\arraystretch}{1.15}
+\renewcommand{\headrulewidth}{0pt}
+\fancyhf{}
+\fancyfoot[L]{\footnotesize math-eval technical report}
+\fancyfoot[R]{\footnotesize \thepage}
+\pagestyle{fancy}
+\fancypagestyle{plain}{\fancyhf{}\fancyfoot[L]{\footnotesize math-eval technical report}\fancyfoot[R]{\footnotesize \thepage}}
+\makeatletter
+\renewcommand{\section}{\@startsection{section}{1}{\z@}{1.25ex plus .4ex minus .2ex}{.55ex plus .15ex}{\normalfont\large\bfseries\color{reportblue}}}
+\makeatother
+
+\title{\textbf{math-eval: Reproducible Mathematical Reasoning\\Generation and Evaluation}}
+\author{Xinmu Ge\\[2pt]
+\normalsize Shanghai Innovation Institute\\
+\normalsize Shanghai Jiao Tong University\\
+\normalsize \texttt{g3ra1d@sjtu.edu.cn}}
+\date{31 August 2026}
+
+\begin{document}
+\maketitle
+\begin{center}
+\small\textsc{Technical Report \;|\; Software Release v0.1.0}
+\end{center}
+\vspace{-0.5em}
+
+\begin{abstract}
+\noindent math-eval is a software workflow for reproducible evaluation of mathematical-reasoning systems. It accepts canonical JSONL records, generates model outputs through vLLM or an OpenAI-compatible API, preserves raw sample artifacts, and replays parsing and scoring independently. This separation permits parser or metric changes without repeating model inference. Runs record configuration, prompt, environment, and artifact hashes; support resumption and deterministic partitions; and validate shard merges before replay. The standard \texttt{math-v5.2-dual} contract reports boxed-only strict results as formal scores and retains whole-response soft results only for diagnosis when no complete box is present. Mathematical equivalence is evaluated with Math-Verify 0.9.0. Canonical dataset snapshots are maintained separately by math-vault, which preserves upstream provenance and licensing records.
+\end{abstract}
+
+\section{Scope and workflow}
+math-eval separates model inference from later evaluation. A canonical JSONL input contains at least an identifier, a problem, and a string answer. The generation stage uses vLLM or an OpenAI-compatible API and writes sample-level raw JSONL artifacts. The replay stage consumes those frozen artifacts, applies a parser and mathematical verifier, and writes parsed verdicts and metrics.
+
+\begin{center}
+\small\fbox{\textsf{canonical JSONL}} $\longrightarrow$ \textsf{generation} $\longrightarrow$ \textsf{raw artifacts} $\longrightarrow$ \textsf{replay, parsing, and scoring} $\longrightarrow$ \textsf{metrics}
+\end{center}
+
+The separation is intentional: parser behavior and metrics may be changed or recomputed without re-calling a model. Raw and parsed artifacts remain distinct, allowing a reported result to be replayed from the saved generation output.
+
+\section{Reproducible execution}
+A run records configuration and prompt snapshots, hashes, and environment state in its manifest. Raw data are written in shards, and an interrupted run can resume with the same configuration and run identifier. The resume path can repair a damaged final in-progress JSONL line and regenerate only samples not yet committed to storage.
+
+Independent workers may process deterministic partitions of one dataset. The partition count identifies workers, whereas raw-shard size controls only output-file boundaries. A later merge produces an ordinary run directory. Before a merge is accepted, the tool checks for missing, duplicate, incomplete, or hash-inconsistent partitions and rejects parts whose code revision or Python/core-package versions do not agree. Checkpoint paths are recorded, but model-weight contents are not fingerprinted; cross-machine users must therefore use the same clean revision and equivalent weights at the recorded path.
+
+\Needspace{7\baselineskip}
+\section{Parsing and scoring contract}
+The default parser identifier is \texttt{math-v5.2-dual}. Its strict result is the formal score and selects the final complete \texttt{\textbackslash boxed\{\}} answer. If a response has no complete box, strict evaluation records no candidate. The soft result may instead submit a nonempty full response to the verifier, but only as a diagnostic signal. A response truncated after a complete box still uses that box; an incomplete trailing box does not replace an earlier complete one.
+
+math-eval records correct, incorrect, no-candidate, parse-error, and verification-error states separately. Parse and verification failures count as failures but are not conflated with mathematical disagreement. Prediction normalization has a five-second hard timeout; a timeout becomes a parse error, preventing a pathological symbolic expression from stalling an entire replay.
+
+For mathematical equivalence, the current pipeline uses Math-Verify 0.9.0 with shared extraction configuration for gold answers and predictions. Metrics are recomputed from parsed verdicts, including accuracy, pass@\(k\), and failure rates. Earlier parser identifiers remain available when an older evaluation contract must be reproduced.
+
+\section{Data boundary and documented use}
+math-eval does not define a new source dataset. math-vault maintains curated, traceable snapshots of public mathematical-reasoning datasets and records their provenance and licensing. Its canonical JSONL files can be used directly as math-eval inputs. This boundary keeps data conversion and source records separate from generation and scoring software.
+
+The paper \emph{Towards Understanding On-Policy Distillation through the Lens of Test-Time Scaling} documents one evaluation use of math-eval and math-vault~\cite{opd}. It is a documented use case, not an endorsement or a claim about the general applicability of either artifact.
+
+\section{Availability and citation}
+\noindent\textbf{Source code.} \url{https://github.com/Geraldxm/math-eval}\\
+\textbf{License.} Apache-2.0\\
+\textbf{Technical report DOI.} \url{https://doi.org/10.5281/zenodo.23030215}\\
+\textbf{Related software artifact DOI.} \url{https://doi.org/10.5281/zenodo.21411208}
+
+\noindent\textbf{Recommended citation for this technical report.} Ge, X. (2026). \emph{math-eval: Reproducible Mathematical Reasoning Generation and Evaluation}. Technical report. Zenodo. \url{https://doi.org/10.5281/zenodo.23030215}.
+
+\noindent\textbf{Recommended citation for the software artifact.} Ge, X. (2026). \emph{math-eval: Reproducible Mathematical Reasoning Generation and Evaluation} (Version v0.1.0). Zenodo. \url{https://doi.org/10.5281/zenodo.21411208}.
+
+\begin{thebibliography}{9}
+\bibitem{mathvault}
+X. Ge. \emph{math-vault: Curated, Traceable Snapshots of Public Mathematical Reasoning Datasets}. Dataset v0.1.0, 2026. Zenodo. \url{https://doi.org/10.5281/zenodo.21411214}.
+
+\bibitem{opd}
+X. Ge et al. \emph{Towards Understanding On-Policy Distillation through the Lens of Test-Time Scaling}. arXiv:2608.11829, 2026. \url{https://arxiv.org/abs/2608.11829}.
+
+\bibitem{mathverify}
+H. Kydlicek. \emph{Math-Verify}, version 0.9.0, 2026. Python package. \url{https://pypi.org/project/math-verify/0.9.0/}.
+\end{thebibliography}
+
+\end{document}
