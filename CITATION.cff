@@ -1,5 +1,5 @@
 cff-version: 1.2.0
-message: "If you use this software, please cite it using the metadata below."
+message: "Please cite the technical report below."
 title: "math-eval: Reproducible Mathematical Reasoning Generation and Evaluation"
 type: software
 authors:
@@ -9,7 +9,16 @@ authors:
     email: "g3ra1d@sjtu.edu.cn"
 repository-code: "https://github.com/Geraldxm/math-eval"
 url: "https://github.com/Geraldxm/math-eval"
-doi: 10.5281/zenodo.21411208
-version: "v0.1.0"
-date-released: 2026-07-17
 license: Apache-2.0
+preferred-citation:
+  type: report
+  authors:
+    - family-names: Ge
+      given-names: Xinmu
+  title: "math-eval: Reproducible Mathematical Reasoning Generation and Evaluation"
+  institution:
+    name: "Shanghai Innovation Institute"
+  version: "math-eval-v0.1.0"
+  year: 2026
+  doi: "10.5281/zenodo.23030215"
+  url: "https://doi.org/10.5281/zenodo.23030215"

@@ -1,7 +1,7 @@
 # math-eval
 
 [![Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.21411207.svg)](https://doi.org/10.5281/zenodo.21411207)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23030215.svg)](https://doi.org/10.5281/zenodo.23030215)
 [![Python 3.12](https://img.shields.io/badge/python-3.12-blue)](https://www.python.org/)
 
 Resumable, replayable math reasoning eval. Reads canonical JSONL, generates via vLLM or OpenAI-compatible API, then parses and scores independently.
@@ -257,29 +257,17 @@ metrics 的 `pass@k` 使用每题全部样本的无偏估计；compare 的 solve
 
 ## 引用
 
-技术报告（方法、评测合同或复现流程）引用：
+请引用技术报告：
 
 ```bibtex
 @techreport{ge_math_eval_report_2026,
-  author = {Ge, Xinmu},
-  title  = {math-eval: Reproducible Mathematical Reasoning Generation and Evaluation},
-  year   = {2026},
-  doi    = {10.5281/zenodo.23030215},
+  author      = {Ge, Xinmu},
+  title       = {math-eval: Reproducible Mathematical Reasoning Generation and Evaluation},
+  institution = {Shanghai Innovation Institute},
+  number      = {math-eval-v0.1.0},
+  year        = {2026},
+  doi         = {10.5281/zenodo.23030215},
   url    = {https://doi.org/10.5281/zenodo.23030215}
-}
-```
-
-软件 artifact（固定版本的软件依赖）引用：
-
-```bibtex
-@software{ge_math_eval_2026,
-  author  = {Ge, Xinmu},
-  title   = {math-eval: Reproducible Mathematical Reasoning Generation and Evaluation},
-  year    = {2026},
-  version = {v0.1.0},
-  doi     = {10.5281/zenodo.21411208},
-  url     = {https://github.com/Geraldxm/math-eval},
-  license = {Apache-2.0}
 }
 ```
 
