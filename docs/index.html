@@ -13,6 +13,7 @@
   <meta name="citation_technical_report_number" content="math-eval-v0.1.0">
   <meta name="citation_doi" content="10.5281/zenodo.23030215">
   <meta name="citation_pdf_url" content="https://geraldxm.github.io/math-eval/math-eval-v0.1.0.pdf">
+  <link rel="canonical" href="https://geraldxm.github.io/math-eval/">
   <title>math-eval: Reproducible Mathematical Reasoning Generation and Evaluation</title>
   <style>
     :root { --ink:#18212b; --muted:#5d6875; --line:#dbe1e7; --paper:#fff; --wash:#f5f7f9; --accent:#0b5cad; }
@@ -31,6 +32,7 @@
     .actions a:first-child { background:var(--accent); border-color:var(--accent); color:#fff; }
     a { color:var(--accent); }
     .pipeline { overflow:auto; padding:16px; background:var(--wash); border-left:3px solid #9cc2e7; font: .95rem/1.5 ui-monospace,SFMono-Regular,Menlo,monospace; }
+    pre { overflow-x:auto; padding:16px; background:var(--wash); border:1px solid var(--line); font:.9rem/1.5 ui-monospace,SFMono-Regular,Menlo,monospace; }
     footer { margin-top:44px; padding-top:18px; border-top:1px solid var(--line); color:var(--muted); font-size:.9rem; }
     @media (max-width:650px) { main { margin:0; padding:34px 24px; box-shadow:none; } body { background:#fff; } }
   </style>
@@ -59,6 +61,16 @@
     <p><a href="https://github.com/Geraldxm/math-vault">math-vault</a> maintains traceable snapshots of public mathematical reasoning datasets and their provenance; its canonical JSONL is a direct input to math-eval. The <a href="https://arxiv.org/abs/2608.11829">OPD paper</a> documents a use of the software and dataset artifacts. It is a use case, not an endorsement.</p>
     <h2>How to cite</h2>
     <p><strong>Technical report:</strong> Ge, X. (2026). <em>math-eval: Reproducible Mathematical Reasoning Generation and Evaluation</em>. Technical report, <code>math-eval-v0.1.0</code>. Zenodo. <a href="https://doi.org/10.5281/zenodo.23030215">https://doi.org/10.5281/zenodo.23030215</a></p>
+    <p><a href="https://raw.githubusercontent.com/Geraldxm/math-eval/main/CITATION.bib">Download the BibTeX source</a></p>
+    <pre><code>@techreport{ge_math_eval_report_2026,
+  author      = {Ge, Xinmu},
+  title       = {math-eval: Reproducible Mathematical Reasoning Generation and Evaluation},
+  institution = {Shanghai Innovation Institute},
+  number      = {math-eval-v0.1.0},
+  year        = {2026},
+  doi         = {10.5281/zenodo.23030215},
+  url         = {https://doi.org/10.5281/zenodo.23030215}
+}</code></pre>
     <p><strong>Related software artifact:</strong> Ge, X. (2026). <em>math-eval: Reproducible Mathematical Reasoning Generation and Evaluation</em> (Version v0.1.0). Zenodo. <a href="https://doi.org/10.5281/zenodo.21411208">https://doi.org/10.5281/zenodo.21411208</a></p>
     <p class="meta">Build the PDF locally with <code>uv run --script docs/build_report.py</code>.</p>
     <footer>Technical report DOI: <a href="https://doi.org/10.5281/zenodo.23030215">10.5281/zenodo.23030215</a> · Apache-2.0 · Related software artifact DOI: <a href="https://doi.org/10.5281/zenodo.21411208">10.5281/zenodo.21411208</a></footer>
