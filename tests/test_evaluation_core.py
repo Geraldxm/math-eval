@@ -194,6 +194,68 @@ class ContractTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "soft thinking"):
             reject_soft_thinking("solve this /think")
 
+    def test_soft_thinking_commands_use_token_boundaries(self):
+        for marker in ("/think", "/no_think", "/nothink"):
+            for text in (
+                marker,
+                marker.upper(),
+                f"Use ({marker}), please.",
+                f"before\n{marker}\nafter",
+                f"</think>{marker}",
+                f"</THINK>{marker.upper()}",
+            ):
+                with self.subTest(text=text), self.assertRaisesRegex(
+                    ValueError, "soft thinking"
+                ):
+                    reject_soft_thinking(text)
+            for text in (
+                f"https://example.org{marker}",
+                f"{marker}/results",
+                f"/results{marker}",
+                f"{marker}ing",
+            ):
+                with self.subTest(text=text):
+                    reject_soft_thinking(text)
+        for text in ("<think>work</think>", "<THINK>work</THINK>", "/thinker"):
+            with self.subTest(text=text):
+                reject_soft_thinking(text)
+
+    def test_reasoning_tags_and_commands_in_prompt_loading_and_rendering(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            for mode in ("chat", "completion"):
+                with self.subTest(mode=mode):
+                    prompt_path = base / mode
+                    if mode == "chat":
+                        prompt_path.mkdir()
+                        text_path = prompt_path / "00-user.txt"
+                    else:
+                        text_path = prompt_path
+                    template = "Use <think>work</THINK>.\n{{problem}}"
+                    text_path.write_text(template, encoding="utf-8")
+                    prompt = load_prompt(str(prompt_path), mode)
+                    problem = "<THINK>reason</think> https://example.org/think /think/results /thinker /no_thinking"
+                    rendered = template.replace("{{problem}}", problem)
+                    self.assertEqual(
+                        render_prompt(prompt, problem),
+                        [{"role": "user", "content": rendered}]
+                        if mode == "chat" else rendered,
+                    )
+                    for marker in ("/think", "/no_think", "/nothink"):
+                        with self.subTest(marker=marker):
+                            text_path.write_text(
+                                f"<think></THINK>{marker.upper()}\n{{{{problem}}}}",
+                                encoding="utf-8",
+                            )
+                            with self.assertRaisesRegex(ValueError, "soft thinking"):
+                                load_prompt(str(prompt_path), mode)
+                            with self.assertRaisesRegex(ValueError, "soft thinking"):
+                                render_prompt(prompt, f"<think></THINK>{marker}")
+                    text_path.write_text("{{problem}}think", encoding="utf-8")
+                    split_command = load_prompt(str(prompt_path), mode)
+                    with self.assertRaisesRegex(ValueError, "soft thinking"):
+                        render_prompt(split_command, "/")
+
     def test_thinking_template_capability_matrix(self):
         class ToggleTokenizer:
             chat_template = "toggle-template"

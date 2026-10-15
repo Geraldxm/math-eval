@@ -48,7 +48,9 @@ NON_STANDARD_API_FIELDS = {
     "stop_token_ids",
     "repetition_penalty",
 }
-SOFT_THINKING_MARKERS = ("/think", "/no_think", "/nothink")
+SOFT_THINKING_COMMAND = re.compile(
+    r"(?<![\w/<])/(?:think|no_think|nothink)(?![\w/])", re.IGNORECASE
+)
 PROBLEM_MARKER = "{{problem}}"
 MESSAGE_FILE = re.compile(r"^(\d+)-(system|user|assistant)\.txt$")
 COMMON_MODEL_FIELDS = {"name", "backend", "input_mode", "thinking", "runtime"}
@@ -92,8 +94,7 @@ class InferenceResult:
 
 
 def reject_soft_thinking(text: str) -> None:
-    lowered = text.lower()
-    if any(marker in lowered for marker in SOFT_THINKING_MARKERS):
+    if SOFT_THINKING_COMMAND.search(text):
         raise ValueError("soft thinking commands are forbidden; use model.thinking")
 
 

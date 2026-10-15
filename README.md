@@ -74,6 +74,9 @@ Prompt 正文保存在 `prompts/`，YAML 只引用路径：
 
 整个 prompt 必须恰好包含一次 `{{problem}}`。
 
+输入校验拒绝独立的 `/think`, `/no_think`, `/nothink` 控制命令; 模式由 `model.thinking` 指定.
+`<think>...</think>` 标签, URL 路径中的 `/think` 和 `/think/results` 这类路径可以保留.
+
 ## 配置
 
 两个最短入口：
