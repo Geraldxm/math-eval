@@ -256,6 +256,25 @@ class ContractTest(unittest.TestCase):
                     with self.assertRaisesRegex(ValueError, "soft thinking"):
                         render_prompt(split_command, "/")
 
+    def test_thinking_tags_in_prompt_are_not_soft_commands(self):
+        system = "Start with an empty <think>\n</think> block."
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)
+            (path / "00-system.txt").write_text(system, encoding="utf-8")
+            (path / "01-user.txt").write_text("{{problem}}", encoding="utf-8")
+            prompt = load_prompt(str(path), "chat")
+            self.assertEqual(
+                render_prompt(prompt, "Explain <THINK>work</THINK>."),
+                [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": "Explain <THINK>work</THINK>."},
+                ],
+            )
+        for marker in ("/think", "/no_think", "/nothink"):
+            with self.subTest(marker=marker), self.assertRaisesRegex(ValueError, "soft thinking"):
+                reject_soft_thinking(f"<think></think> solve this {marker}")
+
+
     def test_thinking_template_capability_matrix(self):
         class ToggleTokenizer:
             chat_template = "toggle-template"
