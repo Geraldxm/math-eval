@@ -186,6 +186,61 @@ DeepSeek API：
 
 API key 仅从 `DEEPSEEK_API_KEY` 环境变量读取，不写入配置或产物。
 
+### 单 checkpoint、多 dataset
+
+`evaluate_suite.py` 在同一进程中顺序运行完整的单 dataset 配置，有待生成的样本时懒创建一个 vLLM backend。每个 case 保持独立的 config/prompt 快照、schema-3 manifest、raw、replay、metrics 和 sample 级恢复；没有 suite 总分或调度逻辑。
+
+```yaml
+# suite.yaml
+schema_version: 1
+cases:
+  - config: ./cases/aime24.yaml
+    run_id: aime24-r001
+  - config: ./cases/aime25.yaml
+    run_id: aime25-r001
+```
+
+```bash
+.venv/bin/python scripts/evaluate_suite.py --suite suite.yaml
+.venv/bin/python scripts/evaluate_suite.py --suite suite.yaml --resume
+```
+
+`config` 引用相对 suite 文件所在目录解析；被引用配置中的 dataset/model/prompt/output 路径继续遵循旧接口的当前工作目录语义。所有输出由各 case 的 `output.root` 指定，配置来源可以只读。不同 case 的 run ID 和最终输出路径必须唯一且互不嵌套。
+
+首版仅支持 `backend: vllm`。全部 case 在加载 engine 前校验，包括数据、prompt、thinking preflight、输出可写性及已有 raw/resume 身份。兼容性使用与实际 `LLM(**kwargs)` 同源的参数，涵盖 model/tokenizer、固定 `trust_remote_code=true`、tensor parallel、dtype、显存、上下文、并发、eager、all-reduce、language-model-only 与 GDN 设置。当前 schema 不接受 revision 或自定义 trust_remote_code。本地路径先规范化比较；显式默认值与省略的工具默认值等价，未由本工具指定默认的可选 vLLM 参数保守地要求同样传入或同样省略。
+
+`input_mode`（`chat`/`completion`）、`thinking`（依原模型模板显式 true/false 或省略）及 `runtime.request_batch_size`（正整数，默认 1）也必须一致。prompt/system、decode、seed、stop 和 `samples_per_problem` 可各不相同；采样 seed 仍为 `decode.seed + sample_idx`。更换 checkpoint 使用新进程。
+
+默认失败即退出。`--resume` 校验并跳过完整 case，保留已有 replay/metrics；partial case 只补缺失 sample，尚未开始的 case 正常创建。全部完成时不创建 backend。SIGTERM 完成当前 batch 后封存 raw、标记 stopped、返回 130，并阻止下一 case 启动；vLLM 继续忽略 SIGINT。replay 仍逐 run 调用现有入口。
+
+以下从仓库根目录创建可运行的 N=4 小例子；两份配置共享模型，分别取 example 数据的前 1/2 题。首次运行需可用 GPU 和参考模型权重：
+
+```bash
+.venv/bin/python - <<'PY'
+from copy import deepcopy
+from pathlib import Path
+import yaml
+
+base = yaml.safe_load(Path("configs/reference_vllm.yaml").read_text())
+destination = Path("outputs/suite-example")
+destination.mkdir(parents=True, exist_ok=True)
+cases = []
+for name, limit in (("tiny-a", 1), ("tiny-b", 2)):
+    config = deepcopy(base)
+    config["dataset"].update(name=name, limit=limit)
+    config["decode"].update(temperature=0.7, samples_per_problem=4)
+    config["output"]["root"] = str(destination / "runs")
+    (destination / f"{name}.yaml").write_text(yaml.safe_dump(config))
+    cases.append({"config": f"{name}.yaml", "run_id": name})
+(destination / "suite.yaml").write_text(yaml.safe_dump({"schema_version": 1, "cases": cases}))
+PY
+.venv/bin/python scripts/evaluate_suite.py --suite outputs/suite-example/suite.yaml
+.venv/bin/python scripts/replay_evaluation.py --run-dir outputs/suite-example/runs/tiny-a --k 1 2 4
+.venv/bin/python scripts/replay_evaluation.py --run-dir outputs/suite-example/runs/tiny-b --k 1 2 4
+```
+
+N=4 只用于管线 smoke 与低 K 观察，不改变默认采样数，也不支持大 K 或 benchmark 质量结论。
+
 ## 解析与判分
 
 生成产物（raw shards）冻结后，解析与判分可独立、反复执行。更换 parser 或验证规则不需要重新调用模型。
@@ -255,6 +310,7 @@ metrics 的 `pass@k` 使用每题全部样本的无偏估计；compare 的 solve
 
 ```bash
 .venv/bin/python -m unittest tests.test_evaluation_core -v
+.venv/bin/python -m unittest tests.test_evaluation_suite -v
 .venv/bin/python -m py_compile scripts/*.py
 ```
 

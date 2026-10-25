@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
+from dataclasses import dataclass
 import importlib.metadata
 import json
 import os
@@ -31,6 +33,7 @@ from io_utils import atomic_json, read_jsonl, stable_hash, utc_now
 from resume import (
     SCHEMA_VERSION,
     RawShardWriter,
+    IndexedRow,
     ensure_manifest,
     missing_indices,
     scan_raw,
@@ -206,6 +209,52 @@ def _expected_keys(
     }
 
 
+@dataclass
+class StopState:
+    requested: bool = False
+
+    def request(self, _signum, _frame) -> None:
+        if self.requested:
+            raise KeyboardInterrupt
+        self.requested = True
+        print(
+            "Stop requested; finishing the current backend batch and sealing raw data.",
+            file=sys.stderr,
+            flush=True,
+        )
+
+
+@contextmanager
+def stop_signals(stop: StopState, backend: str):
+    previous_sigint = signal.getsignal(signal.SIGINT)
+    previous_sigterm = signal.getsignal(signal.SIGTERM)
+    try:
+        signal.signal(signal.SIGTERM, stop.request)
+        signal.signal(signal.SIGINT, signal.SIG_IGN if backend == "vllm" else stop.request)
+        yield
+    finally:
+        signal.signal(signal.SIGINT, previous_sigint)
+        signal.signal(signal.SIGTERM, previous_sigterm)
+
+
+@dataclass
+class PreparedRun:
+    config: dict[str, Any]
+    run_id: str
+    run_dir: Path
+    partition_rows: list[dict[str, Any]]
+    prompt: dict[str, Any]
+    thinking_preflight: dict[str, Any]
+    manifest: dict[str, Any]
+    expected_keys: set[tuple[str, str, str, int]]
+    partition_manifest: dict[str, Any]
+    completed: dict[tuple[str, str, str, int], IndexedRow]
+    work: list[tuple[dict[str, Any], int]]
+    fsync_every: int
+    sample_band_size: int
+    request_batch_size_override: int | None
+
+
 def run(
     config_path: Path,
     run_id: str,
@@ -216,6 +265,25 @@ def run(
     request_batch_size_override: int | None = None,
     fsync_every_override: int | None = None,
 ) -> Path:
+    prepared = prepare_run(
+        config_path, run_id, resume, shard_index, shard_count, sample_band_size,
+        request_batch_size_override, fsync_every_override,
+    )
+    stop = StopState()
+    with stop_signals(stop, prepared.config["model"]["backend"]):
+        return execute_run(prepared, create_backend, stop)
+
+
+def prepare_run(
+    config_path: Path,
+    run_id: str,
+    resume: bool = False,
+    shard_index: int = 0,
+    shard_count: int = 1,
+    sample_band_size: int = 64,
+    request_batch_size_override: int | None = None,
+    fsync_every_override: int | None = None,
+) -> PreparedRun:
     if shard_count < 1:
         raise ValueError("shard_count must be >= 1")
     if not 0 <= shard_index < shard_count:
@@ -240,6 +308,10 @@ def run(
         if fsync_every_override is not None
         else int(output.get("fsync_every", 1))
     )
+    if fsync_every < 1 or int(output.get("shard_size", 100)) < 1:
+        raise ValueError("shard_size and fsync_every must be >= 1")
+    for source in partition_rows:
+        render_prompt(prompt, str(source["problem"]))
     physical_run_id = (
         run_id
         if shard_count == 1
@@ -378,6 +450,36 @@ def run(
         ):
             work.append((source, sample_idx))
     work.sort(key=lambda item: item[1] // sample_band_size)
+    unexpected = set(completed) - expected_keys
+    if unexpected:
+        raise RuntimeError(f"{run_dir}: unexpected raw sample keys: {len(unexpected)}")
+    return PreparedRun(
+        config, run_id, run_dir, partition_rows, prompt, thinking_preflight,
+        manifest, expected_keys, partition_manifest, completed, work,
+        fsync_every, sample_band_size, request_batch_size_override,
+    )
+
+
+def execute_run(prepared: PreparedRun, backend_factory, stop: StopState) -> Path:
+    config = prepared.config
+    run_id, run_dir = prepared.run_id, prepared.run_dir
+    partition_rows, prompt = prepared.partition_rows, prepared.prompt
+    thinking_preflight, manifest = prepared.thinking_preflight, prepared.manifest
+    expected_keys, partition_manifest = prepared.expected_keys, prepared.partition_manifest
+    completed, work = prepared.completed, prepared.work
+    fsync_every, sample_band_size = prepared.fsync_every, prepared.sample_band_size
+    request_batch_size_override = prepared.request_batch_size_override
+    output = config["output"]
+    model_name, dataset_name = str(config["model"]["name"]), str(config["dataset"]["name"])
+    samples_per_problem = int(config["decode"]["samples_per_problem"])
+    manifest_path = run_dir / "manifests/run.json"
+    problem_uids = {f"{dataset_name}:{source['id']}" for source in partition_rows}
+    if (
+        not work and manifest.get("status") == "completed"
+        and manifest.get("raw_content_sha256") is not None
+        and not list((run_dir / "raw").glob("**/*.inprogress"))
+    ):
+        return run_dir
 
     raw_dir = run_dir / "raw" / safe_name(model_name) / safe_name(dataset_name)
     indices_by_problem = {
@@ -427,29 +529,9 @@ def run(
     ):
         manifest.pop(key, None)
     update_progress("running")
-    stop_requested = False
-    previous_sigint = signal.getsignal(signal.SIGINT)
-    previous_sigterm = signal.getsignal(signal.SIGTERM)
-
-    def request_stop(_signum, _frame) -> None:
-        nonlocal stop_requested
-        if stop_requested:
-            raise KeyboardInterrupt
-        stop_requested = True
-        print(
-            "Stop requested; finishing the current backend batch and sealing raw data.",
-            file=sys.stderr,
-            flush=True,
-        )
-
-    signal.signal(signal.SIGTERM, request_stop)
-    signal.signal(
-        signal.SIGINT,
-        signal.SIG_IGN if config["model"]["backend"] == "vllm" else request_stop,
-    )
-    if work:
-        try:
-            backend = create_backend(config["model"], thinking_preflight)
+    try:
+        if work:
+            backend = backend_factory(config["model"], thinking_preflight)
             if request_batch_size_override is not None:
                 if not hasattr(backend, "request_batch_size"):
                     raise ValueError(
@@ -464,7 +546,7 @@ def run(
                 fsync_every=fsync_every,
             ) as writer:
                 for offset in range(0, len(work), request_batch_size):
-                    if stop_requested:
+                    if stop.requested:
                         break
                     batch = work[offset : offset + request_batch_size]
                     requests = [
@@ -499,70 +581,65 @@ def run(
                         while depths[uid] in indices_by_problem[uid]:
                             depths[uid] += 1
                     update_progress("running")
-                    if stop_requested:
+                    if stop.requested:
                         break
-        except BaseException:
-            signal.signal(signal.SIGINT, previous_sigint)
-            signal.signal(signal.SIGTERM, previous_sigterm)
-            manifest.update({"status": "failed", "failed_at": utc_now()})
-            manifest.pop("process_id", None)
-            atomic_json(manifest_path, manifest)
-            raise
 
-    manifest.update({"status": "finalizing", "updated_at": utc_now()})
-    manifest.pop("process_id", None)
-    atomic_json(manifest_path, manifest)
-    signal.signal(signal.SIGINT, previous_sigint)
-    signal.signal(signal.SIGTERM, previous_sigterm)
-
-    # Seal a fully written active shard even when resume found no missing work.
-    RawShardWriter(
-        raw_dir,
-        shard_size=int(output.get("shard_size", 100)),
-        compression=output.get("compression", "none"),
-        fsync_every=fsync_every,
-    ).close()
-    if list(raw_dir.glob("part-*.jsonl.inprogress")):
-        raise RuntimeError(f"{run_dir}: unsealed raw shard remains")
-    completed = scan_raw(run_dir / "raw")
-    actual_keys = set(completed)
-    if stop_requested:
-        manifest["stopped_at"] = utc_now()
-        update_progress("stopped")
-        return run_dir
-    invalid_keys = {
-        key
-        for key in actual_keys
-        if key[0] != model_name
-        or key[1] != dataset_name
-        or key[2] not in problem_uids
-        or key[3] < 0
-    }
-    if actual_keys != expected_keys or invalid_keys:
-        missing = len(expected_keys - actual_keys)
-        unexpected = len(actual_keys - expected_keys)
-        raise RuntimeError(
-            f"{run_dir}: raw sample keys do not match partition "
-            f"(missing={missing}, unexpected={unexpected}, invalid={len(invalid_keys)})"
-        )
-    sample_count = len(actual_keys)
-    raw_content_sha256 = stable_hash(
-        [completed[key].row for key in sorted(completed)]
-    )
-    if manifest.get("raw_content_sha256") not in (None, raw_content_sha256):
-        raise RuntimeError(f"{run_dir}: raw content changed since completion")
-
-    manifest.update(
-        {
-            "status": "completed",
-            "completed_at": utc_now(),
-            "sample_count": sample_count,
-            "raw_content_sha256": raw_content_sha256,
+        manifest.update({"status": "finalizing", "updated_at": utc_now()})
+        manifest.pop("process_id", None)
+        atomic_json(manifest_path, manifest)
+        # Seal a fully written active shard even when resume found no missing work.
+        RawShardWriter(
+            raw_dir,
+            shard_size=int(output.get("shard_size", 100)),
+            compression=output.get("compression", "none"),
+            fsync_every=fsync_every,
+        ).close()
+        if list(raw_dir.glob("part-*.jsonl.inprogress")):
+            raise RuntimeError(f"{run_dir}: unsealed raw shard remains")
+        completed = scan_raw(run_dir / "raw")
+        actual_keys = set(completed)
+        if stop.requested:
+            manifest["stopped_at"] = utc_now()
+            update_progress("stopped")
+            return run_dir
+        invalid_keys = {
+            key
+            for key in actual_keys
+            if key[0] != model_name
+            or key[1] != dataset_name
+            or key[2] not in problem_uids
+            or key[3] < 0
         }
-    )
-    manifest.pop("process_id", None)
-    atomic_json(run_dir / "manifests/run.json", manifest)
-    return run_dir
+        if actual_keys != expected_keys or invalid_keys:
+            missing = len(expected_keys - actual_keys)
+            unexpected = len(actual_keys - expected_keys)
+            raise RuntimeError(
+                f"{run_dir}: raw sample keys do not match partition "
+                f"(missing={missing}, unexpected={unexpected}, invalid={len(invalid_keys)})"
+            )
+        sample_count = len(actual_keys)
+        raw_content_sha256 = stable_hash(
+            [completed[key].row for key in sorted(completed)]
+        )
+        if manifest.get("raw_content_sha256") not in (None, raw_content_sha256):
+            raise RuntimeError(f"{run_dir}: raw content changed since completion")
+
+        manifest.update(
+            {
+                "status": "completed",
+                "completed_at": utc_now(),
+                "sample_count": sample_count,
+                "raw_content_sha256": raw_content_sha256,
+            }
+        )
+        manifest.pop("process_id", None)
+        atomic_json(run_dir / "manifests/run.json", manifest)
+        return run_dir
+    except BaseException:
+        manifest.update({"status": "failed", "failed_at": utc_now()})
+        manifest.pop("process_id", None)
+        atomic_json(manifest_path, manifest)
+        raise
 
 
 def main() -> int:

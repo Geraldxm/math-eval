@@ -375,6 +375,60 @@ def preflight_model(model: dict[str, Any]) -> dict[str, Any]:
     return thinking_template_preflight(tokenizer, model)
 
 
+def vllm_engine_kwargs(model: dict[str, Any]) -> dict[str, Any]:
+    """Return the exact keyword arguments used to construct a vLLM LLM."""
+    model = validate_model(model)
+    if model["backend"] != "vllm":
+        raise ValueError("vLLM engine settings require model.backend='vllm'")
+    runtime = model.get("runtime", {})
+    kwargs: dict[str, Any] = {
+        "model": model["path"],
+        "tokenizer": model.get("tokenizer_path", model["path"]),
+        "trust_remote_code": True,
+        "tensor_parallel_size": int(runtime.get("tensor_parallel_size", 1)),
+        "dtype": runtime.get("dtype", "auto"),
+        "gpu_memory_utilization": float(runtime.get("gpu_memory_utilization", 0.9)),
+    }
+    mapping = {"max_context_tokens": "max_model_len"}
+    for key in (
+        "max_context_tokens",
+        "max_num_seqs",
+        "enforce_eager",
+        "disable_custom_all_reduce",
+        "language_model_only",
+        "gdn_prefill_backend",
+    ):
+        if key in runtime:
+            kwargs[mapping.get(key, key)] = runtime[key]
+    return kwargs
+
+
+def _normalized_model_reference(value: str) -> str:
+    path = Path(value).expanduser()
+    if path.exists() or value.startswith((".", "~")) or path.is_absolute():
+        return str(path.resolve())
+    return value
+
+
+def vllm_backend_signature(model: dict[str, Any]) -> dict[str, Any]:
+    """Describe engine and fixed backend settings that a suite must share."""
+    model = validate_model(model)
+    if model["backend"] != "vllm":
+        raise ValueError("vLLM backend settings require model.backend='vllm'")
+    engine = vllm_engine_kwargs(model)
+    for key in ("model", "tokenizer"):
+        engine[key] = _normalized_model_reference(engine[key])
+    # These two vLLM options default to false; preserve the effective value.
+    engine.setdefault("enforce_eager", False)
+    engine.setdefault("disable_custom_all_reduce", False)
+    return {
+        "engine": engine,
+        "input_mode": model["input_mode"],
+        "thinking": model.get("thinking"),
+        "request_batch_size": int(model.get("runtime", {}).get("request_batch_size", 1)),
+    }
+
+
 # This adapter only supports Qwen-style `<think>...</think>` output.
 def normalize_local_text(
     raw_text: str,
@@ -423,18 +477,7 @@ class VllmBackend:
             raise ValueError("model.runtime.request_batch_size must be >= 1")
         from vllm import LLM
 
-        kwargs: dict[str, Any] = {
-            "model": self.model["path"],
-            "tokenizer": self.model.get("tokenizer_path", self.model["path"]),
-            "trust_remote_code": True,
-            "tensor_parallel_size": int(runtime.get("tensor_parallel_size", 1)),
-            "dtype": runtime.get("dtype", "auto"),
-            "gpu_memory_utilization": float(runtime.get("gpu_memory_utilization", 0.9)),
-        }
-        mapping = {"max_context_tokens": "max_model_len"}
-        for key in ("max_context_tokens", "max_num_seqs", "enforce_eager", "disable_custom_all_reduce", "language_model_only", "gdn_prefill_backend"):
-            if key in runtime:
-                kwargs[mapping.get(key, key)] = runtime[key]
+        kwargs = vllm_engine_kwargs(self.model)
         self.engine_request = kwargs
         self.llm = LLM(**kwargs)
 
