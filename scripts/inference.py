@@ -25,6 +25,7 @@ DECODE_FIELDS = {
     "top_k",
     "min_p",
     "seed",
+    "seed_strategy",
     "max_output_tokens",
     "min_output_tokens",
     "stop",
@@ -183,6 +184,15 @@ def validate_decode(value: dict[str, Any]) -> dict[str, Any]:
     decode["temperature"] = float(decode["temperature"])
     decode["top_p"] = float(decode["top_p"])
     decode["seed"] = int(decode["seed"])
+    if "seed_strategy" in decode and decode["seed_strategy"] not in {
+        "legacy",
+        "disjoint_blocks",
+    }:
+        raise ValueError("seed_strategy must be legacy or disjoint_blocks")
+    if decode.get("seed_strategy") == "disjoint_blocks" and decode["seed"] < 0:
+        raise ValueError("disjoint_blocks requires seed >= 0")
+    if decode.get("seed_strategy") == "disjoint_blocks" and decode["seed"] >= 2**12:
+        raise ValueError("disjoint_blocks requires seed < 2**12")
     decode["max_output_tokens"] = int(decode["max_output_tokens"])
     decode["samples_per_problem"] = int(decode["samples_per_problem"])
     if decode["temperature"] < 0:
@@ -193,6 +203,11 @@ def validate_decode(value: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("max_output_tokens must be >= 1")
     if decode["samples_per_problem"] < 1:
         raise ValueError("samples_per_problem must be >= 1")
+    if (
+        decode.get("seed_strategy") == "disjoint_blocks"
+        and decode["samples_per_problem"] > 2**20
+    ):
+        raise ValueError("disjoint_blocks supports samples_per_problem <= 2**20")
     if "top_k" in decode:
         decode["top_k"] = int(decode["top_k"])
         if decode["top_k"] < 0:
@@ -224,6 +239,18 @@ def validate_decode(value: dict[str, Any]) -> dict[str, Any]:
         if key in decode:
             decode[key] = float(decode[key])
     return decode
+
+
+def sample_seed(decode: dict[str, Any], sample_idx: int) -> int:
+    """Resolve a per-sample seed while keeping legacy runs byte-compatible."""
+    decode = validate_decode(decode)
+    if sample_idx < 0:
+        raise ValueError("sample_idx must be >= 0")
+    if decode.get("seed_strategy", "legacy") == "legacy":
+        return decode["seed"] + sample_idx
+    if sample_idx >= 2**20:
+        raise ValueError("disjoint_blocks supports sample_idx < 2**20")
+    return decode["seed"] * 2**20 + sample_idx
 
 
 def sampling_request(decode: dict[str, Any], seed: int | None = None) -> dict[str, Any]:
@@ -503,7 +530,7 @@ class VllmBackend:
         resolved = [
             sampling_request(
                 request["decode"],
-                int(request["decode"]["seed"]) + request["sample_idx"],
+                sample_seed(request["decode"], request["sample_idx"]),
             )
             for request in requests
         ]
@@ -601,7 +628,7 @@ class OpenAIBackend:
     ) -> InferenceResult:
         if not isinstance(prompt, list):
             raise ValueError("OpenAI-compatible backend requires message lists")
-        resolved = sampling_request(decode, int(decode["seed"]) + sample_idx)
+        resolved = sampling_request(decode, sample_seed(decode, sample_idx))
         capabilities = set(self.model.get("capabilities", []))
         unsupported = NON_STANDARD_API_FIELDS & resolved.keys() - capabilities
         if unsupported:

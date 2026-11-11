@@ -104,6 +104,8 @@ configs/qwen35_4b_base.yaml
 
 常改字段为 `dataset`、`prompt`、`model`、`decode` 和 `output`。`decode.temperature`、`top_p`、`seed`、`max_output_tokens`、`samples_per_problem` 必须显式填写。每题多样本时应使用非零 temperature。
 
+默认 `decode.seed_strategy` 为 `legacy`，每个样本使用 `seed + sample_idx`。需要让不同配置 seed 的采样池互不重叠时显式设置 `disjoint_blocks`：每个 sample 使用 `seed * 2^20 + sample_idx`，要求 seed 在 `[0, 4096)` 且 `samples_per_problem <= 2^20`，以保证传给 RNG 的 seed 小于 `2^32`。该索引映射在扩展样本数及改变分片数时保持稳定；旧配置与旧 run 仍使用 legacy 映射。
+
 ## 生成与续跑
 
 ```bash

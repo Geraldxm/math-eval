@@ -28,6 +28,7 @@ from inference import (
     render_prompt,
     resolved_thinking_request,
     sampling_request,
+    sample_seed,
     thinking_template_preflight,
     validate_model,
 )
@@ -113,6 +114,32 @@ class MockHandler(BaseHTTPRequestHandler):
 
 
 class ContractTest(unittest.TestCase):
+    def test_disjoint_sample_seeds_preserve_legacy_and_extend_by_index(self):
+        legacy = decode_config(seed=3)
+        self.assertEqual([sample_seed(legacy, i) for i in range(3)], [3, 4, 5])
+
+        independent = decode_config(seed=3, seed_strategy="disjoint_blocks")
+        seeds = [sample_seed(independent, i) for i in range(1024)]
+        self.assertEqual(len(set(seeds)), 1024)
+        self.assertTrue(all(seed >= 3 * 2**20 for seed in seeds))
+        self.assertTrue(all(seed < 2**32 for seed in seeds))
+        self.assertTrue(set(seeds).isdisjoint(range(1026)))
+        self.assertEqual(sample_seed(independent, 100), seeds[100])
+        self.assertEqual(sample_seed(independent, 1023), 3 * 2**20 + 1023)
+        with self.assertRaisesRegex(ValueError, "sample_idx"):
+            sample_seed(independent, 2**20)
+        with self.assertRaises(ValueError):
+            sample_seed(decode_config(seed=2**12, seed_strategy="disjoint_blocks"), 0)
+        with self.assertRaisesRegex(ValueError, "samples_per_problem"):
+            sample_seed(
+                decode_config(
+                    seed=3,
+                    seed_strategy="disjoint_blocks",
+                    samples_per_problem=2**20 + 1,
+                ),
+                0,
+            )
+
     def test_canonical_loader_rejects_duplicate_ids(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "data.jsonl"
@@ -385,8 +412,8 @@ class OpenAIAdapterTest(unittest.TestCase):
             with patch.dict(os.environ, {"TEST_API_KEY": "secret"}):
                 result = OpenAIBackend(self.model(server.server_port)).generate(
                     [{"role": "user", "content": "2+2?"}],
-                    decode_config(max_output_tokens=16),
-                    0,
+                    decode_config(max_output_tokens=16, seed=3, seed_strategy="disjoint_blocks"),
+                    7,
                 )
         finally:
             server.shutdown()
@@ -395,6 +422,8 @@ class OpenAIAdapterTest(unittest.TestCase):
         self.assertEqual(result.reasoning_text, "two plus two")
         self.assertEqual(result.final_text, "\\boxed{4}")
         self.assertEqual(MockHandler.payload["max_tokens"], 16)
+        self.assertEqual(MockHandler.payload["seed"], 3 * 2**20 + 7)
+        self.assertEqual(result.resolved_request["seed"], MockHandler.payload["seed"])
         self.assertEqual(
             MockHandler.payload["chat_template_kwargs"], {"enable_thinking": False}
         )
@@ -1047,6 +1076,11 @@ class PipelineTest(unittest.TestCase):
                 self.assertFalse(active.exists())
                 self.assertTrue(sealed.exists())
                 config["decode"]["temperature"] = 0.1
+                config_path.write_text(yaml.safe_dump(config), encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, "generation spec"):
+                    run(config_path, "run", True)
+                config["decode"]["temperature"] = 0.0
+                config["decode"]["seed_strategy"] = "disjoint_blocks"
                 config_path.write_text(yaml.safe_dump(config), encoding="utf-8")
                 with self.assertRaisesRegex(ValueError, "generation spec"):
                     run(config_path, "run", True)
