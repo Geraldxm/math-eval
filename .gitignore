@@ -28,3 +28,7 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 .ruff_cache/
+
+# Native crash dumps stay local and can contain process memory.
+/core
+/core.[0-9]*
