@@ -85,8 +85,22 @@ def run_suite(suite_path: Path, resume: bool = False) -> int:
             if stop.requested:
                 return 130
             manifest_exists = (run_dir / "manifests/run.json").exists()
-            if not manifest_exists and run_dir.exists() and any(run_dir.rglob("*")):
-                raise FileExistsError(f"{run_dir}: refusing to reuse output without a manifest")
+            if not manifest_exists and run_dir.exists() and any(run_dir.iterdir()):
+                snapshots = {"manifests", "manifests/config.yaml", "manifests/prompt.json"}
+                if not resume or any(
+                    entry.is_symlink()
+                    or entry.relative_to(run_dir).as_posix() not in snapshots
+                    or (
+                        entry.relative_to(run_dir).as_posix() == "manifests"
+                        and not entry.is_dir()
+                    )
+                    or (
+                        entry.relative_to(run_dir).as_posix() != "manifests"
+                        and not entry.is_file()
+                    )
+                    for entry in run_dir.rglob("*")
+                ):
+                    raise FileExistsError(f"{run_dir}: refusing to reuse output without a manifest")
             try:
                 case = prepare_run(config_path, run_id, resume and manifest_exists)
                 if case.manifest.get("run_id") != run_id:

@@ -16,6 +16,7 @@ from evaluate import run as evaluate_run
 from evaluate_suite import load_suite, run_suite
 from inference import InferenceResult, sampling_request
 from io_utils import read_jsonl
+import resume
 from replay_evaluation import replay
 from resume import scan_raw
 
@@ -151,6 +152,113 @@ class EvaluationSuiteTest(unittest.TestCase):
                 self.assertEqual(run_suite(self.suite, resume=True), 0)
                 create.assert_not_called()
             self.assertEqual(metrics.read_bytes(), before)
+
+    def test_resume_recovers_matching_snapshots_left_before_run_manifest(self):
+        for failure_point, preserved in (
+            ("prompt.json", ("config.yaml",)),
+            ("run.json", ("config.yaml", "prompt.json")),
+        ):
+            with self.subTest(failure_point=failure_point):
+                self.tearDown()
+                self.setUp()
+                self._suite([{"config": "a.yaml", "run_id": "run-a"}])
+                original_atomic_json = resume.atomic_json
+
+                def interrupt(path, value):
+                    if path.name == failure_point:
+                        raise RuntimeError("simulated initialization interruption")
+                    return original_atomic_json(path, value)
+
+                with patch("evaluate.preflight_model", return_value={"applicable": True}), \
+                     patch("evaluate.environment_snapshot", return_value={"packages": {}}), \
+                     patch("evaluate.code_revision", return_value={"commit": "test", "dirty": True}), \
+                     patch("evaluate_suite.create_backend") as create, \
+                     patch("resume.atomic_json", side_effect=interrupt):
+                    with self.assertRaisesRegex(RuntimeError, "simulated initialization interruption"):
+                        run_suite(self.suite)
+                    create.assert_not_called()
+
+                run_dir = self.output / "run-a"
+                manifest_dir = run_dir / "manifests"
+                before = {name: (manifest_dir / name).read_bytes() for name in preserved}
+
+                with patch("evaluate.preflight_model", return_value={"applicable": True}), \
+                     patch("evaluate.environment_snapshot", return_value={"packages": {}}), \
+                     patch("evaluate.code_revision", return_value={"commit": "test", "dirty": True}), \
+                     patch("evaluate_suite.create_backend", return_value=FakeBackend()) as create:
+                    self.assertEqual(run_suite(self.suite, resume=True), 0)
+                    self.assertEqual(create.call_count, 1)
+                self.assertEqual(before, {name: (manifest_dir / name).read_bytes() for name in preserved})
+
+    def test_resume_rejects_mismatched_orphan_snapshots_without_overwriting(self):
+        for name, contents in (("config.yaml", "dataset: wrong\n"), ("prompt.json", "{}\n")):
+            with self.subTest(snapshot=name):
+                self.tearDown()
+                self.setUp()
+                self._suite([{"config": "a.yaml", "run_id": "run-a"}])
+                original_atomic_json = resume.atomic_json
+
+                def interrupt_before_manifest(path, value):
+                    if path.name == "run.json":
+                        raise RuntimeError("simulated initialization interruption")
+                    return original_atomic_json(path, value)
+
+                with patch("evaluate.preflight_model", return_value={"applicable": True}), \
+                     patch("evaluate.environment_snapshot", return_value={"packages": {}}), \
+                     patch("evaluate.code_revision", return_value={"commit": "test", "dirty": True}), \
+                     patch("resume.atomic_json", side_effect=interrupt_before_manifest):
+                    with self.assertRaisesRegex(RuntimeError, "simulated initialization interruption"):
+                        run_suite(self.suite)
+
+                snapshot = self.output / "run-a" / "manifests" / name
+                snapshot.write_text(contents)
+                before = snapshot.read_bytes()
+                with patch("evaluate.preflight_model", return_value={"applicable": True}), \
+                     patch("evaluate.environment_snapshot", return_value={"packages": {}}), \
+                     patch("evaluate.code_revision", return_value={"commit": "test", "dirty": True}), \
+                     patch("evaluate_suite.create_backend") as create:
+                    with self.assertRaisesRegex(RuntimeError, "refusing to overwrite"):
+                        run_suite(self.suite, resume=True)
+                    create.assert_not_called()
+                self.assertEqual(snapshot.read_bytes(), before)
+
+    def test_resume_rejects_non_snapshot_orphan_contents(self):
+        for extra in ("file", "directory", "symlink", "without_resume"):
+            with self.subTest(extra=extra):
+                self.tearDown()
+                self.setUp()
+                self._suite([{"config": "a.yaml", "run_id": "run-a"}])
+                original_atomic_json = resume.atomic_json
+
+                def interrupt_before_manifest(path, value):
+                    if path.name == "run.json":
+                        raise RuntimeError("simulated initialization interruption")
+                    return original_atomic_json(path, value)
+
+                with patch("evaluate.preflight_model", return_value={"applicable": True}), \
+                     patch("evaluate.environment_snapshot", return_value={"packages": {}}), \
+                     patch("evaluate.code_revision", return_value={"commit": "test", "dirty": True}), \
+                     patch("resume.atomic_json", side_effect=interrupt_before_manifest):
+                    with self.assertRaisesRegex(RuntimeError, "simulated initialization interruption"):
+                        run_suite(self.suite)
+
+                run_dir = self.output / "run-a"
+                if extra == "file":
+                    (run_dir / "unexpected.txt").write_text("preserve")
+                elif extra == "directory":
+                    (run_dir / "unexpected").mkdir()
+                elif extra == "symlink":
+                    snapshot = run_dir / "manifests/config.yaml"
+                    snapshot.unlink()
+                    snapshot.symlink_to(self.root / "a.yaml")
+
+                with patch("evaluate.preflight_model", return_value={"applicable": True}), \
+                     patch("evaluate.environment_snapshot", return_value={"packages": {}}), \
+                     patch("evaluate.code_revision", return_value={"commit": "test", "dirty": True}), \
+                     patch("evaluate_suite.create_backend") as create:
+                    with self.assertRaisesRegex(FileExistsError, "refusing to reuse output"):
+                        run_suite(self.suite, resume=extra != "without_resume")
+                    create.assert_not_called()
 
     def test_stop_seals_current_run_and_restores_signals(self):
         backend = FakeBackend(stop_on=("a: 1+1", 0))
