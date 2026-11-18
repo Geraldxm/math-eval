@@ -20,7 +20,7 @@ model:
     tensor_parallel_size: 1
     dtype: bfloat16
     max_context_tokens: 32768
-    gpu_memory_utilization: 0.95
+    gpu_memory_utilization: 0.92
     request_batch_size: 512
 
 decode:
@@ -34,4 +34,4 @@ output:
   root: outputs/runs
   shard_size: 5000
   compression: none
-  fsync_every: 128
+  fsync_every: 1
