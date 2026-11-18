@@ -97,6 +97,15 @@ configs/qwen3_next_80b_a3b_instruct.yaml
 configs/qwen35_4b_base.yaml
 ```
 
+长生成（32k context）单卡吞吐示例：
+
+```text
+configs/qwen3_4b_32k_h200.yaml   # H200 141GB
+configs/qwen3_4b_32k_h100.yaml   # H100 80GB
+```
+
+两者使用 `request_batch_size: 512`、`fsync_every: 128`，不显式设置 `max_num_seqs`、`enforce_eager`（沿用 vLLM 默认的 1024 与 CUDA graph）；`gpu_memory_utilization` 分别为 0.95 与 0.85。这些 runtime 字段只影响吞吐，dataset、prompt、decode 仍按评测合同固定。同一 run 续跑时 `request_batch_size` 须保持不变。
+
 这些配置使用公开 model ID；`model.path` 也可改为本地 checkpoint。Llama 模型仍受其上游访问条件约束。全部可配置字段见：
 
 - `configs/reference_vllm.yaml`

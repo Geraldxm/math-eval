@@ -1,0 +1,37 @@
+# 单卡 H100 80GB 长生成吞吐示例（32k context，TP1）。
+# 只有 model.runtime 和 output 中的 IO 参数与硬件相关；dataset、prompt、
+# decode 按评测合同填写。vLLM 未显式设置时 max_num_seqs 在 >=70GB GPU
+# 上默认 1024，enforce_eager 默认 false（捕获 CUDA graph）。显存不足时
+# 先下调 max_num_seqs（如 256），不要把 request_batch_size 压到很小：
+# 每个 request batch 需等最长样本结束，过小会被长尾拖慢。
+dataset:
+  name: example_math
+  path: data/example_math.jsonl
+
+prompt: prompts/math-chat
+
+model:
+  name: Qwen3-4B
+  backend: vllm
+  path: Qwen/Qwen3-4B
+  input_mode: chat
+  thinking: false
+  runtime:
+    tensor_parallel_size: 1
+    dtype: bfloat16
+    max_context_tokens: 32768
+    gpu_memory_utilization: 0.85
+    request_batch_size: 512
+
+decode:
+  temperature: 0.6
+  top_p: 0.95
+  seed: 0
+  max_output_tokens: 31744
+  samples_per_problem: 16
+
+output:
+  root: outputs/runs
+  shard_size: 5000
+  compression: none
+  fsync_every: 128
