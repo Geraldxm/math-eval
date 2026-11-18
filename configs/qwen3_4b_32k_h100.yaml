@@ -20,7 +20,7 @@ model:
     tensor_parallel_size: 1
     dtype: bfloat16
     max_context_tokens: 32768
-    gpu_memory_utilization: 0.92
+    gpu_memory_utilization: 0.90
     request_batch_size: 512
 
 decode:
