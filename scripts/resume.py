@@ -251,8 +251,21 @@ def ensure_manifest(
         if existing.get("generation_spec_hash") != spec_hash:
             raise ValueError("generation spec does not match existing run")
         return existing
-    if resume:
-        raise FileNotFoundError(f"cannot resume without {manifest_path}")
+    if resume and run_dir.exists():
+        # --resume on a run that never wrote its manifest is a fresh start, so one command serves
+        # both the first launch and every relaunch. Only matching config/prompt snapshots left by
+        # an interrupted initialization may already exist; any other content has no provenance.
+        snapshots = {"manifests", "manifests/config.yaml", "manifests/prompt.json"}
+        for entry in run_dir.rglob("*"):
+            relative = entry.relative_to(run_dir).as_posix()
+            if (
+                entry.is_symlink()
+                or relative not in snapshots
+                or entry.is_dir() != (relative == "manifests")
+            ):
+                raise FileExistsError(
+                    f"{run_dir}: refusing to resume output without a run manifest"
+                )
     if config_path.exists():
         if stable_hash(config_path.read_text(encoding="utf-8")) != config_hash:
             raise FileExistsError(f"refusing to overwrite {config_path}")

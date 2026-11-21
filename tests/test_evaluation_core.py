@@ -53,7 +53,7 @@ from parser import (
     parse_v52_dual_and_verify,
 )
 from replay_evaluation import replay
-from resume import RawShardWriter, scan_raw
+from resume import RawShardWriter, ensure_manifest, scan_raw
 
 
 def decode_config(**updates):
@@ -558,6 +558,46 @@ class ResumeTest(unittest.TestCase):
                 writer.close()
             self.assertTrue(active.exists())
             self.assertEqual(list(root.glob("*.tmp")), [])
+
+
+class ResumeWithoutManifestTest(unittest.TestCase):
+    def _ensure(self, run_dir, config_text="config: 1\n", prompt=None):
+        return ensure_manifest(
+            run_dir, {"run_id": "run"}, {"spec": 1}, config_text, prompt or {"p": 1}, True
+        )
+
+    def test_resume_without_manifest_is_a_fresh_start(self):
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory) / "run"
+            manifest = self._ensure(run_dir)
+            self.assertEqual(manifest["run_id"], "run")
+            self.assertTrue((run_dir / "manifests/run.json").exists())
+            self.assertEqual(self._ensure(run_dir), manifest)
+
+    def test_resume_recovers_matching_snapshots_left_before_manifest(self):
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory) / "run"
+            self._ensure(run_dir)
+            (run_dir / "manifests/run.json").unlink()
+            before = (run_dir / "manifests/config.yaml").read_bytes()
+            self._ensure(run_dir)
+            self.assertEqual(before, (run_dir / "manifests/config.yaml").read_bytes())
+            self.assertTrue((run_dir / "manifests/run.json").exists())
+
+    def test_resume_rejects_mismatched_snapshot_and_orphan_output(self):
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory) / "run"
+            self._ensure(run_dir)
+            (run_dir / "manifests/run.json").unlink()
+            with self.assertRaisesRegex(FileExistsError, "refusing to overwrite"):
+                self._ensure(run_dir, config_text="config: 2\n")
+            self.assertFalse((run_dir / "manifests/run.json").exists())
+            orphan = run_dir / "raw" / "part-00000.jsonl"
+            orphan.parent.mkdir()
+            orphan.write_text("{}\n", encoding="utf-8")
+            with self.assertRaisesRegex(FileExistsError, "without a run manifest"):
+                self._ensure(run_dir)
+            self.assertFalse((run_dir / "manifests/run.json").exists())
 
 
 class ParserAndMetricsTest(unittest.TestCase):

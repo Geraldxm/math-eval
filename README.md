@@ -131,6 +131,8 @@ configs/qwen3_4b_32k_h100.yaml   # H100 80GB
   --run-id example-vllm --resume
 ```
 
+首次运行也可以直接带 `--resume`：run 目录不存在、为空，或只留有与本次一致的 `manifests/config.yaml`、`manifests/prompt.json` 时按全新运行处理，因此首次提交和续跑可以用同一条命令。目录里有其他内容却没有 run manifest 时仍会拒绝。
+
 同一数据集可由多个独立进程确定性分区。`--shard-count` 是 worker 数据分区数；配置中的 `output.shard_size` 只控制每个 raw JSONL 文件最多写多少行，两者互不影响。两张卡各运行一半数据时，保持配置中的 `tensor_parallel_size: 1`：
 
 ```bash
