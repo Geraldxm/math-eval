@@ -502,6 +502,10 @@ class VllmBackend:
         self.request_batch_size = int(runtime.get("request_batch_size", 1))
         if self.request_batch_size < 1:
             raise ValueError("model.runtime.request_batch_size must be >= 1")
+        # Disable vLLM usage stats by default: its py-cpuinfo CPUID probe
+        # clobbers rbx and segfaults, leaving core.<pid> files in the cwd.
+        # Set VLLM_NO_USAGE_STATS=0 explicitly to opt back in.
+        os.environ.setdefault("VLLM_NO_USAGE_STATS", "1")
         from vllm import LLM
 
         kwargs = vllm_engine_kwargs(self.model)
