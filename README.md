@@ -33,10 +33,37 @@ lm-eval-harness、LightEval 等框架在 CLI 层统一多 benchmark 调用，但
 
 ## 安装
 
-完整 GPU 环境要求 Linux x86_64、NVIDIA driver 和 [uv](https://docs.astral.sh/uv/)。当前 lock 验证基线为 Python 3.12.11、vLLM 0.25.1+cu129 与 PyTorch 2.11.0+cu129：
+完整 GPU 环境要求 Linux x86_64 和 [uv](https://docs.astral.sh/uv/)。当前 lock 验证基线为 Python 3.12.11、vLLM 0.25.1+cu129 与 PyTorch 2.11.0+cu129。
+
+**在 GPU 机器上安装**：`install.sh` 默认 `TORCH_BACKEND=auto`，由 uv 按本机 NVIDIA driver 选择 PyTorch 的 CUDA 构建：
 
 ```bash
 ./install.sh .venv
+```
+
+**在没有 GPU 的机器上准备环境**（例如在 CPU 实例上把环境装到共享盘，再交给 GPU 作业使用）：`auto` 在没有 NVIDIA driver 的机器上会选 CPU 构建，与 lock 中的 `+cu129` 冲突，需显式指定：
+
+```bash
+TORCH_BACKEND=cu129 ./install.sh .venv
+```
+
+GPU 作业所在节点的 driver 需支持 CUDA 12.9 及以上。
+
+**使用 PyPI 镜像**：uv 直接读取 `UV_DEFAULT_INDEX`，可与上面两种情况组合，例如：
+
+```bash
+TORCH_BACKEND=cu129 UV_DEFAULT_INDEX=https://<pypi-mirror>/simple/ UV_HTTP_TIMEOUT=600 ./install.sh .venv
+```
+
+镜像只影响普通 PyPI 包（包括 `nvidia-*` CUDA 运行库，约占包数的九成）。`torch`、`torchvision`、`torchaudio` 的 `+cu129` 构建只发布在 PyTorch 官方索引，vLLM 的 `+cu129` wheel (来自 vLLM 官方 wheel 镜像 wheels.vllm.ai, 与 GitHub release 为同一文件, 带 sha256 校验) 和 `torchcodec` 在 lock 中写的是直接下载地址，这几项不经过镜像。
+
+按需拉取的镜像（例如 Nexus 的 PyPI proxy）在第一次遇到未缓存的大包（如 `nvidia-cudnn-cu12`）时，要先从上游拉完整个文件才开始返回数据，uv 默认的 30 秒超时可能不够，因此上例把 `UV_HTTP_TIMEOUT` 设为 600 秒。镜像偶尔对首次请求返回 500，重试即可。
+
+安装中途失败时，已下载的包留在 uv 缓存里；删除未完成的环境后重跑即可复用：
+
+```bash
+rm -rf .venv
+TORCH_BACKEND=cu129 ./install.sh .venv
 ```
 
 `requirements-gpu.lock` 是已验证环境的完整 package 快照，不是跨平台通用 lock。下载代理可通过单次命令的 `DOWNLOAD_PROXY` 环境变量显式提供。

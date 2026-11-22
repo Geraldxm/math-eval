@@ -198,7 +198,7 @@ tokenspeed-triton==3.8.10.post20260709
 torch==2.11.0+cu129
 torch-c-dlpack-ext==0.1.5
 torchaudio==2.11.0+cu129
-torchcodec==0.14.0+cpu
+torchcodec @ https://download-r2.pytorch.org/whl/cpu/torchcodec-0.14.0%2Bcpu-cp312-cp312-manylinux_2_28_x86_64.whl#sha256=0da64ee68e8103a28906e0950acc40e2501d81894c3cb2b17e461336c08ab42f
 torchvision==0.26.0+cu129
 tornado==6.5.7
 tqdm==4.68.4
@@ -211,7 +211,7 @@ typing-inspection==0.4.2
 urllib3==2.7.0
 uvicorn==0.51.0
 uvloop==0.22.1
-vllm @ https://github.com/vllm-project/vllm/releases/download/v0.25.1/vllm-0.25.1+cu129-cp38-abi3-manylinux_2_28_x86_64.whl
+vllm @ https://wheels.vllm.ai/752a3a504485790a2e8491cacbb35c137339ad34/vllm-0.25.1%2Bcu129-cp38-abi3-manylinux_2_28_x86_64.whl#sha256=9e206f370c934a2d4b6b1f05d3d09708d344e05d80260189ef19f60755709431
 watchfiles==1.2.0
 wcwidth==0.8.2
 websockets==16.1
