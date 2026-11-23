@@ -19,7 +19,7 @@ model:
   #   max_context_tokens: 8192       # 映射为 vLLM max_model_len。
   #   gpu_memory_utilization: 0.85   # 每张 GPU 的目标显存占比；默认 0.9。
   #   max_num_seqs: 64               # vLLM engine 的并发序列上限。
-  #   request_batch_size: 64         # 本工具每次提交给 vLLM 的请求数；默认 1。长生成见 qwen3_4b_32k_h200/h100.yaml。
+  #   request_batch_size: 2048       # 本工具每次阻塞调用 vLLM 提交的请求数；默认 2048（大于 max_num_seqs 以便补位）。长生成见 qwen3_4b_32k_h200/h100.yaml。
   #   enforce_eager: false           # 传给 vLLM engine。
   #   disable_custom_all_reduce: false  # 传给 vLLM engine。
   #   language_model_only: true      # 仅 Qwen3.5/3.6 hybrid 模型按需设置。

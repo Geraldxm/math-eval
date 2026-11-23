@@ -452,9 +452,14 @@ def vllm_backend_signature(model: dict[str, Any]) -> dict[str, Any]:
         "engine": engine,
         "input_mode": model["input_mode"],
         "thinking": model.get("thinking"),
-        "request_batch_size": int(model.get("runtime", {}).get("request_batch_size", 1)),
+        "request_batch_size": int(model.get("runtime", {}).get("request_batch_size", DEFAULT_VLLM_REQUEST_BATCH_SIZE)),
     }
 
+
+# Requests handed to vLLM per blocking llm.generate call when model.runtime.request_batch_size is unset.
+# Each call returns only after its slowest sample finishes, so a value above vLLM's max_num_seqs (default 1024
+# on >=70GB GPUs) keeps queued requests ready to fill freed slots. Larger values lose more work on preemption.
+DEFAULT_VLLM_REQUEST_BATCH_SIZE = 2048
 
 # This adapter only supports Qwen-style `<think>...</think>` output.
 def normalize_local_text(
@@ -499,7 +504,7 @@ class VllmBackend:
             else preflight_model(self.model)
         )
         runtime = self.model.get("runtime", {})
-        self.request_batch_size = int(runtime.get("request_batch_size", 1))
+        self.request_batch_size = int(runtime.get("request_batch_size", DEFAULT_VLLM_REQUEST_BATCH_SIZE))
         if self.request_batch_size < 1:
             raise ValueError("model.runtime.request_batch_size must be >= 1")
         # Disable vLLM usage stats by default: its py-cpuinfo CPUID probe

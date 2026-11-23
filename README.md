@@ -131,7 +131,7 @@ configs/qwen3_4b_32k_h200.yaml   # H200 141GB
 configs/qwen3_4b_32k_h100.yaml   # H100 80GB
 ```
 
-两者使用 `request_batch_size: 512`、`fsync_every: 1`，不显式设置 `max_num_seqs`、`enforce_eager`（沿用 vLLM 默认的 1024 与 CUDA graph）；`gpu_memory_utilization` H200 为 0.92，H100 为 0.90。这些 runtime 字段只影响吞吐，dataset、prompt、decode 仍按评测合同固定。同一 run 续跑时 `request_batch_size` 须保持不变。
+两者使用 `max_num_seqs: 1024`（与 vLLM 在 ≥70GB GPU 上的默认值相同，显式写出以固定）、`request_batch_size: 2048`（2026-11-23 由 512 调整：offline `llm.generate` 每批需等最长样本结束，批量为 `max_num_seqs` 的 2 倍时 vLLM 始终有排队请求补位；更大的值收益递减，且被抢占时丢失整批）、`fsync_every: 1`，不显式设置 `enforce_eager`（沿用 CUDA graph）；`gpu_memory_utilization` H200 为 0.92，H100 为 0.90。这些 runtime 字段只影响吞吐，dataset、prompt、decode 仍按评测合同固定。同一 run 续跑时 `request_batch_size` 须保持不变。vLLM 后端未设置 `request_batch_size` 时默认 2048（2026-11-23 前为 1）；依赖旧默认值的 run 续跑时请显式写 1 或用 `--request-batch-size-override 1`，该字段只影响吞吐。
 
 这些配置使用公开 model ID；`model.path` 也可改为本地 checkpoint。Llama 模型仍受其上游访问条件约束。全部可配置字段见：
 
@@ -249,7 +249,7 @@ cases:
 
 首版仅支持 `backend: vllm`。全部 case 在加载 engine 前校验，包括数据、prompt、thinking preflight、输出可写性及已有 raw/resume 身份。兼容性使用与实际 `LLM(**kwargs)` 同源的参数，涵盖 model/tokenizer、固定 `trust_remote_code=true`、tensor parallel、dtype、显存、上下文、并发、eager、all-reduce、language-model-only 与 GDN 设置。当前 schema 不接受 revision 或自定义 trust_remote_code。本地路径先规范化比较；显式默认值与省略的工具默认值等价，未由本工具指定默认的可选 vLLM 参数保守地要求同样传入或同样省略。
 
-`input_mode`（`chat`/`completion`）、`thinking`（依原模型模板显式 true/false 或省略）及 `runtime.request_batch_size`（正整数，默认 1）也必须一致。prompt/system、decode、seed、stop 和 `samples_per_problem` 可各不相同；采样 seed 仍为 `decode.seed + sample_idx`。更换 checkpoint 使用新进程。
+`input_mode`（`chat`/`completion`）、`thinking`（依原模型模板显式 true/false 或省略）及 `runtime.request_batch_size`（正整数，vLLM 默认 2048）也必须一致。prompt/system、decode、seed、stop 和 `samples_per_problem` 可各不相同；采样 seed 仍为 `decode.seed + sample_idx`。更换 checkpoint 使用新进程。
 
 默认失败即退出。`--resume` 校验并跳过完整 case，保留已有 replay/metrics；partial case 只补缺失 sample，尚未开始的 case 正常创建。全部完成时不创建 backend。SIGTERM 完成当前 batch 后封存 raw、标记 stopped、返回 130，并阻止下一 case 启动；vLLM 继续忽略 SIGINT。replay 仍逐 run 调用现有入口。
 

@@ -1,9 +1,13 @@
 # 单卡 H100 80GB 长生成吞吐示例（32k context，TP1）。
 # 只有 model.runtime 和 output 中的 IO 参数与硬件相关；dataset、prompt、
 # decode 按评测合同填写。vLLM 未显式设置时 max_num_seqs 在 >=70GB GPU
-# 上默认 1024，enforce_eager 默认 false（捕获 CUDA graph）。显存不足时
-# 先下调 max_num_seqs（如 256），不要把 request_batch_size 压到很小：
-# 每个 request batch 需等最长样本结束，过小会被长尾拖慢。
+# 上默认 1024，这里显式写出以免随 vLLM 版本变化；enforce_eager 默认 false
+# （捕获 CUDA graph）。request_batch_size 是每次阻塞调用 llm.generate 交给
+# vLLM 的请求数，须等该批最长样本结束才提交下一批；设为 max_num_seqs 的
+# 2 倍，让 vLLM 始终有排队请求可补位（2026-11-23 由 512 调为 2048：
+# 实测 512 时长尾阶段 GPU 闲置，MMLU-Pro 类短回答 bench 估计提速约 1.4x）。
+# 再调大收益递减，且被抢占或中断时丢失整批。显存不足时先下调 max_num_seqs
+# （如 256），不要把 request_batch_size 压到很小。
 dataset:
   name: example_math
   path: data/example_math.jsonl
@@ -21,7 +25,8 @@ model:
     dtype: bfloat16
     max_context_tokens: 32768
     gpu_memory_utilization: 0.90
-    request_batch_size: 512
+    max_num_seqs: 1024
+    request_batch_size: 2048
 
 decode:
   temperature: 0.6

@@ -425,7 +425,7 @@ class EvaluationSuiteTest(unittest.TestCase):
         config["model"]["tokenizer_path"] = config["model"]["path"]
         config["model"]["runtime"] = {
             "tensor_parallel_size": "1", "gpu_memory_utilization": "0.9",
-            "dtype": "auto", "request_batch_size": 1,
+            "dtype": "auto", "request_batch_size": 2048,
             "enforce_eager": False, "disable_custom_all_reduce": False,
         }
         config["decode"]["samples_per_problem"] = 2
